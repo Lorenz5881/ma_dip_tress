@@ -1,0 +1,27 @@
+{
+  "rna_bases": ["A", "U", "C", "G"],
+  "segments": [
+    "PB2",
+    "PB1",
+    "PA",
+    "HA",
+    "NP",
+    "NA",
+    "M",
+    "NS"
+  ],
+  "strains": [
+    "A_Anhui_1_2013",
+    "A_California_07_2009",
+    "A_Connecticut_Flu122_2013",
+    "A_NewCaledonia_20-JY2_1999",
+    "A_Perth_16_2009",
+    "A_PuertoRico_8_1934",
+    "A_turkey_Turkey_1_2005",
+    "A_WSN_33",
+    "B_Brisbane_60_2008",
+    "B_Lee_1940",
+    "B_Victoria_504_2000",
+    "B_Yamagata_16_1988"
+  ]
+}
