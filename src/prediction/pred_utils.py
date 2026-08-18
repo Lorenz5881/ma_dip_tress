@@ -30,13 +30,12 @@ import sys
 from pathlib import Path
 import traceback
 
-# Make src imports independent from process working directory.
+import shap
+
 SRC_DIR = Path(__file__).resolve().parent.parent
 if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
-from utils import get_sequence, make_multiclass
-
-# TODO: Comment and document code
+from utils import get_sequence
 
 logger = logging.getLogger(__name__)
 logging.getLogger('matplotlib.font_manager').setLevel(logging.ERROR)
@@ -143,9 +142,7 @@ def select_classifier(name: str, perform_grid_search: bool = False):
             case 'lgb':
                 clf = LGBMClassifier(objective = 'binary')
             case _:
-                logging.error(f'Error: Unknown classifier name {name}. Skipping...')
-                #clf = LogisticRegression(max_iter=10000, solver="saga", l1_ratio=0.5)
-                #return clf, get_param_grid("logistic_regression")
+                logger.error(f'Error: Unknown classifier name {name}. Skipping...')
                 return "unknown classifier", None
         param_grid = get_param_grid(name)
     else:    
@@ -167,9 +164,7 @@ def select_classifier(name: str, perform_grid_search: bool = False):
             case 'lgb':
                 clf = LGBMClassifier(learning_rate=0.1, n_estimators=200, max_depth=2, objective = 'binary')
             case _:
-                logging.error(f'Error: Unknown classifier name {name}. Skipping...')
-                #clf = LogisticRegression(penalty="l1", C=1.0, solver="saga", max_iter=10000)
-                #return clf, dict()
+                logger.error(f'Error: Unknown classifier name {name}. Skipping...')
                 return "unknown classifier", None
         param_grid = dict()
     return clf, param_grid
@@ -200,9 +195,7 @@ def select_regressor(name: str, perform_grid_search: bool = False):
             case 'knn':
                 reg = KNeighborsRegressor()
             case _:
-                logging.error(f'Error: Unknown regressor name {name}. Skipping...')
-                #reg = LinearRegression()
-                #return reg, get_param_grid('linear', True)
+                logger.error(f'Error: Unknown regressor name {name}. Skipping...')
                 return "unknown regressor", None
         param_grid = get_param_grid(name, True)
     else:
@@ -230,9 +223,7 @@ def select_regressor(name: str, perform_grid_search: bool = False):
             case 'knn':
                 reg = KNeighborsRegressor()
             case _:
-                logging.error(f'Error: Unknown regressor name {name}. Skipping...')
-                #reg = LinearRegression()
-                #return reg, dict()
+                logger.error(f'Error: Unknown regressor name {name}. Skipping...')
                 return "unknown regressor", None
         param_grid = dict()
 
@@ -246,13 +237,13 @@ def make_artificial_set(strain, segment, step_distance=5):
     :param segment: Segment of the virus
     :param step_distance: Distance between possible start- and end-values
 
-    :return: Dataframe with all possible DelVGs
+    :return: Dataframe with possible DelVGs
     '''
     seq = get_sequence(strain, segment)
     n = len(seq)
     rows = []
-    for start in range(20, n-20-step_distance, step_distance):
-        for end in range(start, n-20, step_distance):
+    for start in range(25, n-15-step_distance, step_distance):
+        for end in range(start, n-15, step_distance):
             new_row = pd.DataFrame.from_dict({"Strain": [strain], "Segment": [segment], "Start": [start], "End": [end], "Full_Sequence": [seq]})
             rows.append(new_row)
     df = pd.concat(rows, ignore_index=True)
@@ -268,12 +259,8 @@ def plot_startvsend(df, name, labels, thresholds, y_column, result_path) -> None
     :param labels: List of labels for each datapoint (y values)
     :param thresholds: List of thresholds between classes
     :param result_path: Path to save the plots
-
-    :return: None
     '''
     os.makedirs(result_path, exist_ok=True)
-    #logging.info(f'Creating scatter plot for {name} on Start and End positions')
-    #logging.debug(f'Columns: {df.columns}\nLabels: {labels}\nThresholds: {thresholds}')
     plt.rcParams.update({'font.size': 14})
     df_c = df.copy()
     fig, ax = plt.subplots(figsize=(10,10))
@@ -298,7 +285,6 @@ def plot_startvsend(df, name, labels, thresholds, y_column, result_path) -> None
     gc.collect()
 
     # Making plot with label colors
-    # mapping colors to classes
     classes = np.unique(labels)
     num_classes = len(classes)
     colors = cm.viridis(np.linspace(0, 1, num_classes))
@@ -306,13 +292,10 @@ def plot_startvsend(df, name, labels, thresholds, y_column, result_path) -> None
     for label in range(num_classes):
         label_colors[label] = colors[label]
     cmap = ListedColormap(colors)
-    #logging.debug(f'classes: {classes}\t {num_classes}\ncolors: {colors}\nlabel_colors:\n{label_colors}\nlabels:\n{set(labels)}')
-
-    # Plotting the scatter plot
+    
     fig2, ax2 = plt.subplots(figsize=(10, 10))
     scatter2 = ax2.scatter(df_c["Start"], df_c["End"], alpha=0.5, cmap=cmap, c=labels)
 
-    # Making custom legend to show the classes and thresholds between them
     handles = [plt.Line2D([0], [0], marker='o', color='w', markerfacecolor=colors[0], markersize=10,
                           label=classes[0])]
     if thresholds is not None:
@@ -369,9 +352,8 @@ def plot_prediction_startvsend(X_test, y_test, predictions, name, result_path, m
     :return: None
     '''
     os.makedirs(result_path, exist_ok=True)
-    logging.debug(f'Creating scatter plot based on predictions of {name} on Start and End positions')
+    logger.debug(f'Creating scatter plot based on predictions of {name} on Start and End positions')
 
-    # plot predicted labels
     fig, ax = plt.subplots(figsize=(10,10))
     if multi_seg:
         classes = ALL_SEGMENTS
@@ -380,8 +362,6 @@ def plot_prediction_startvsend(X_test, y_test, predictions, name, result_path, m
     else:
         classes = list(np.unique(predictions))
         num_classes = len(classes)
-        #if num_classes < 2:
-        #    num_classes = 2
         colors = cm.viridis(np.linspace(0, 1, num_classes))
     label_colors = {label: color for label, color in zip(classes, colors)}
     if not multi_seg:
@@ -389,24 +369,15 @@ def plot_prediction_startvsend(X_test, y_test, predictions, name, result_path, m
             label_colors[label] = colors[label]
     cmap = ListedColormap(colors)
     if multi_seg:
-        #high_list = []
-        #for idx, row in X_test.iterrows():
-        #    if predictions[idx] == 1:
-        #        high_list.append(idx)
         X_test['pred'] = predictions
-        #X_test = X_test[high_list]
         X_test = X_test[X_test['pred']==1]
-        #predictions = predictions[high_list]
         X_test['Segment'] = X_test.apply(lambda row: [col for col in ALL_SEGMENTS if row[col] == 1], axis=1)
-        #print(X_test.columns)
-        labels = X_test['Segment']#X_test['pred']
+        labels = X_test['Segment']
         labels = [x[0] for x in labels]
         labels = [labels.index(x) for x in labels]
         scatter = ax.scatter(X_test["Start"], X_test["End"], alpha=0.5, cmap=cmap, c=labels)
     else:
         scatter = ax.scatter(X_test["Start"], X_test["End"], alpha=0.5, cmap=cmap, c=predictions)
-
-    #scatter = ax.scatter(X_test["Start"], X_test["End"], alpha=0.5, cmap=cmap, c=labels)
 
     ax.text(.99, 0.5, f'n = {len(X_test["Start"])}', transform=ax.transAxes, fontsize=14, verticalalignment='bottom',
              horizontalalignment='right')
@@ -434,10 +405,8 @@ def plot_prediction_startvsend(X_test, y_test, predictions, name, result_path, m
         # plot true labels
         fig2, ax2 = plt.subplots(figsize=(10, 10))
         correct = []
-        #print(f'len(predictions): {len(predictions)}\nlen(y_test): {len(y_test)}\npredictions:\n{predictions}\ny_test:\n{y_test}')
         i = 0
         for idx, true_label in y_test.items():
-            #logging.info(f'idx: {idx}\ti: {i}\ttrue_label: {true_label}\tprediction: {predictions[i]}')
             if predictions[i] == true_label:
                 correct.append(1)
             else:
@@ -482,7 +451,7 @@ def decode_ohes(df):
 
     :return: Dataframe with decoded columns
     '''
-    logging.debug(f'Decoding one-hot-encoded columns')
+    logger.debug(f'Decoding one-hot-encoded columns')
     features = []
     sequence_ohe, junction_ohe, strain_ohe, segment_ohe = False,False,False,False
     for col in df.columns:
@@ -521,7 +490,6 @@ def make_barplot(df, name, result_path, feature, y_column, heatmap=False) -> Non
     :return: None
     '''
     os.makedirs(result_path, exist_ok=True)
-    #logging.info(f'Creating {feature} distribution plot for {name}')
     plt.rcParams.update({'font.size': 14})
     df_c = df
     sums = {}
@@ -531,7 +499,7 @@ def make_barplot(df, name, result_path, feature, y_column, heatmap=False) -> Non
         case 'Segment':
             all_groups = ALL_SEGMENTS
         case _:
-            logging.error(f'Feature {feature} not recognized for barplots.')
+            logger.error(f'Feature {feature} not recognized for barplots.')
     for group in all_groups:
         sums[group] = 0
         try:
@@ -539,9 +507,7 @@ def make_barplot(df, name, result_path, feature, y_column, heatmap=False) -> Non
         except:
             pass
     keys = sums.keys()
-    #logging.debug(f'keys: {keys}')
     values = sums.values()
-    #logging.debug(f'values: {values}')
     fig, ax = plt.subplots(figsize=(14, 6))
     ax.barh(keys, values)
     ax.set_title(f'{name}: {feature} distribution')
@@ -556,19 +522,13 @@ def make_barplot(df, name, result_path, feature, y_column, heatmap=False) -> Non
     gc.collect()
 
     if heatmap:
-        #logging.info(f'Including heatmap plot')
         cmap = plt.cm.viridis
         fig, ax = plt.subplots(figsize=(14, 6))
-
-        #data = {strain: list(df[strain]['NGS_log_norm']) for strain in ALL_STRAINS}
-
-        # Plot each strain as a horizontal bar with heatmap effect
         try:
             for i, group in enumerate(all_groups):
                 group_data = df[df[group]>0][y_column].value_counts().sort_index()
                 df_t = group_data.reset_index()
                 if len(group_data) == 0:
-                    #logging.debug(f'No data for {feature} {group}')
                     ax.barh(group, 0, edgecolor='none')
                     continue
 
@@ -583,7 +543,6 @@ def make_barplot(df, name, result_path, feature, y_column, heatmap=False) -> Non
                 group_data = df[df[feature]==group][y_column].value_counts().sort_index()
                 df_t = group_data.reset_index()
                 if len(group_data) == 0:
-                    #logging.debug(f'No data for {feature} {group}')
                     ax.barh(group, 0, edgecolor='none')
                     continue
 
@@ -593,13 +552,10 @@ def make_barplot(df, name, result_path, feature, y_column, heatmap=False) -> Non
                     color = cmap(row[y_column])
                     ax.barh(group, count, left=starting_value, color=color, edgecolor='none')
                     starting_value += count
-
-
-        # Customize the plot
+        
         ax.set_xlabel('Proportion')
         ax.set_title(f'Distribution of NGS-Counts Across {feature}s')
 
-        # Create a colorbar for reference
         sm = plt.cm.ScalarMappable(cmap=cmap, norm=plt.Normalize(vmin=0, vmax=1))
         sm.set_array([])
         cbar = plt.colorbar(sm, ax=ax, orientation='horizontal', label='Normed NGS Read Count Log', aspect=50)
@@ -610,7 +566,8 @@ def make_barplot(df, name, result_path, feature, y_column, heatmap=False) -> Non
         if result_path != "":
             os.makedirs(result_path, exist_ok=True)
             plt.savefig(os.path.join(result_path, f'{name}_{feature}_bars_heatmap.png'))
-        #plt.show()
+        else:
+            plt.show()
         plt.close()
         gc.collect()
 
@@ -625,12 +582,9 @@ def make_histogram(df, name, feature, thresholds, result_path) -> None:
     :param feature: Feature to plot
     :param thresholds: List of thresholds to mark in the plot
     :param result_path: Path to save the plots
-
-    :return: None
     '''
     os.makedirs(result_path, exist_ok=True)
-    logging.debug(f'Creating histogram for {name}: {feature}')
-    #logging.debug(f'Columns: {set(df.columns)}\nFeature: {feature}\nThresholds: {thresholds}')
+    logger.debug(f'Creating histogram for {name}: {feature}')
     plt.rcParams.update({'font.size': 14})
     df_c = df.copy()
     uniques = df_c[feature].nunique()
@@ -640,7 +594,7 @@ def make_histogram(df, name, feature, thresholds, result_path) -> None:
         bins = 40
     else:
         bins = 100
-    logging.debug(f'bins are set to {bins}, based on number of uniques {uniques}')
+    logger.debug(f'bins are set to {bins}, based on number of uniques {uniques}')
     if feature not in ["Intersections", "Inter_norm"]:
         bins = int(uniques/3)
     else:
@@ -652,7 +606,6 @@ def make_histogram(df, name, feature, thresholds, result_path) -> None:
         ax.hist(df_long_del[feature], bins=bins, color='r', alpha=0.3, label='Long DelVGs')
 
     median = np.median(df[feature])
-    #logging.debug(f'Median: {median}\ty_lim: {ax.get_ylim()}')
     ax.axvline(median, color='teal', linestyle='dashed', linewidth=3, label='Median')
     ax.text(median-.01, ax.get_ylim()[1]*0.95, f'{median:.2f}', color='teal', ha='right')
 
@@ -660,7 +613,6 @@ def make_histogram(df, name, feature, thresholds, result_path) -> None:
     lo = df_c[feature].min()
     hi = df_c[feature].max()
     xlim = ax.get_xlim()
-    #logging.debug(f'lo: {lo}\thi: {hi}\txlim: {xlim}')
 
     # Adjusting plots with negative x-values, to center around 0
     if lo < 0:
@@ -668,7 +620,6 @@ def make_histogram(df, name, feature, thresholds, result_path) -> None:
     else:
         ax.set_xlim(0, xlim[1])
 
-    # Marking thresholds for ngs_log_norm
     if feature == 'NGS_log_norm' and thresholds is not None:
         for i, threshold in enumerate(thresholds):
             ax.axvline(threshold, color='r', linestyle='dashed', linewidth=2, label=i)
@@ -684,7 +635,6 @@ def make_histogram(df, name, feature, thresholds, result_path) -> None:
     ax.legend()
     ax.set_title(f'{name}: {feature.replace("_", " ")} Histogram')
     plt.tight_layout()
-    #plt.show()
     if result_path != "":
         os.makedirs(result_path,exist_ok=True)
         plt.savefig(os.path.join(result_path, f'{name}_{feature}_hist.png'))
@@ -708,9 +658,8 @@ def visualize_segments(df, name, y, thresholds, y_column, result_path) -> None:
     :return: None
     '''
     os.makedirs(result_path, exist_ok=True)
-    logging.debug(f'Beginning to visualize Segments.')
+    logger.debug(f'Beginning to visualize Segments.')
     for seg in ALL_SEGMENTS:
-        #prepare dataframe to only include the current segment
         df_c = df.copy()
         df_c['y'] = y
         if seg in df_c.columns:
@@ -718,12 +667,9 @@ def visualize_segments(df, name, y, thresholds, y_column, result_path) -> None:
         else:
             df_c = df_c[df_c['Segment']==seg]
 
-        # skip if no data for this segment
         if df_c.shape[0] == 0:
-            #logging.debug(f'No data for segment {seg}')
             continue
 
-        #logging.info(f'Visualizing segment {seg}')
         seg_path = os.path.join(result_path, seg)
         os.makedirs(seg_path, exist_ok=True)
         y_c = df_c['y']
@@ -753,28 +699,87 @@ def visualize_dataset(df, name, y, thresholds, y_column, features, result_path) 
     os.makedirs(result_path, exist_ok=True)
     if not os.path.exists(result_path):
         os.makedirs(result_path)
-    #logging.debug(f'Saving results in {result_path}')
-    logging.debug(f'Visualizing dataset {name}')
+    logger.debug(f'Visualizing dataset {name}')
     try:
         make_histogram(df, name, y_column, thresholds, result_path)
     except Exception:
-        logging.error(f'Issue with histogram plot\n{traceback.format_exc()}')
+        logger.error(f'Issue with histogram plot\n{traceback.format_exc()}')
     if ('Start' in features and 'End' in features) or ('Start' in df.columns and 'End' in df.columns):
         try:
             plot_startvsend(df, name, y, thresholds, y_column, result_path)
         except Exception:
-            logging.error(f'Issue with histogram plot\n{traceback.format_exc()}')
+            logger.error(f'Issue with histogram plot\n{traceback.format_exc()}')
     if ('Strain' in features or 'Strain' in df.columns) and df["Strain"].nunique()>1:
         try:
             make_barplot(df, name, result_path, 'Strain', y_column, heatmap=True)
         except Exception:
-            logging.error(f'Issue with histogram plot\n{traceback.format_exc()}')
+            logger.error(f'Issue with histogram plot\n{traceback.format_exc()}')
     if 'Segment' in features or 'Segment' in df.columns:
         try:
             make_barplot(df, name, result_path, 'Segment', y_column, heatmap=True)
         except Exception:
-            logging.error(f'Issue with histogram plot\n{traceback.format_exc()}')
+            logger.error(f'Issue with histogram plot\n{traceback.format_exc()}')
         try:
             visualize_segments(df, name, y, thresholds, y_column, result_path)
         except Exception as e:
-            logging.error(f'Error in visualizing segments: {e}')
+            logger.error(f'Error in visualizing segments: {e}')
+
+
+def rename_col_labels(label):
+    '''
+    Renames column labels for better readability in plots. Replaces certain substrings with more descriptive terms and formats the label.
+    '''
+    replacements = {
+        "Celltype": "",
+        "Host": "",
+        ".0": "",
+        "kmeans": "k-means",
+        "hdbscan": "HDBSCAN",
+        "comb0": "hybrid",
+        "scaff0": "scaffold",
+        "comb5": "hybrid",
+        "scaff5": "scaffold",
+        "comb10": "hybrid",
+        "scaff10": "scaffold",
+        "comb15": "hybrid",
+        "scaff15": "scaffold",
+        "Distance_to": "Dist",
+        "centroid": "Centroid",
+        "_": " ",
+    }
+    for old, new in replacements.items():
+        label = label.replace(old, new)
+    return label.title()
+
+def plot_multiclass_shap_summary(shap_values, X_test, class_names=None, max_display=20, result_path="", name_prefix="model"):
+    '''
+    Plots SHAP summary plots for each class in a multiclass classification problem.
+
+    :param shap_values: SHAP values array of shape (n_samples, n_features, n_classes).
+    :param X_test: Test dataset used for computing SHAP values.
+    :param class_names: List of class names.
+    :param max_display: Maximum number of features to display in the summary plot.
+    :param result_path: Path to save the plots. If empty, plots will be shown instead.
+    :param name_prefix: Prefix for the plot filenames.
+    '''
+    n_classes = shap_values.shape[0]
+    if class_names is None:
+        class_names = [f"Class {i}" for i in range(n_classes)]
+    for i in range(n_classes):
+        plt.figure(figsize=(8, 6))
+        plt.title(class_names[i])
+        shap.summary_plot(
+            shap_values[:, :, i],
+            X_test,
+            max_display=max_display,
+            show=False,
+        )
+        plt.xlabel("SHAP Value")
+        new_labels = [rename_col_labels(label.get_text()) for label in plt.gca().get_yticklabels()]
+        plt.gca().set_yticklabels(new_labels)
+        plt.tight_layout()
+        if result_path != "" and result_path is not None:
+            os.makedirs(result_path, exist_ok=True)
+            plt.savefig(os.path.join(result_path, f'{name_prefix}_shap_summary_{class_names[i]}.png'))
+        else:
+            plt.show()

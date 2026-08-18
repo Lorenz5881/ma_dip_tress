@@ -1,0 +1,10 @@
+
+{
+    "scaffold_hdbscan_A_PuertoRico_8_1934": ["A_PuertoRico_8_1934_PB2_2052_2139", "A_PuertoRico_8_1934_PA_142_172", "A_PuertoRico_8_1934_PB1_279_2110", "A_PuertoRico_8_1934_PA_194_1960", "A_PuertoRico_8_1934_PB2_91_119"],
+    "scaffold_kmeans_A_PuertoRico_8_1934": ["A_PuertoRico_8_1934_PA_294_1945", "A_PuertoRico_8_1934_PB1_223_2054", "A_PuertoRico_8_1934_PA_121_189", "A_PuertoRico_8_1934_PB1_68_116", "A_PuertoRico_8_1934_PB1_2060_2129", "A_PuertoRico_8_1934_PB1_162_2149", "A_PuertoRico_8_1934_PA_208_1929"],
+    "combumap_hdbscan_A_PuertoRico_8_1934": ["A_PuertoRico_8_1934_PB1_115_138", "A_PuertoRico_8_1934_PA_86_261", "A_PuertoRico_8_1934_PB2_216_2048", "A_PuertoRico_8_1934_PA_146_1986"],
+    "combumap_kmeans_A_PuertoRico_8_1934": ["A_PuertoRico_8_1934_PA_437_1749", "A_PuertoRico_8_1934_PB2_143_2048", "A_PuertoRico_8_1934_PA_2026_2048", "A_PuertoRico_8_1934_PB1_115_138", "A_PuertoRico_8_1934_PB2_168_2200", "A_PuertoRico_8_1934_PA_297_1808", "A_PuertoRico_8_1934_PB1_147_2111"],
+    "cdhit_6_80_A_PuertoRico_8_1934": ["A_PuertoRico_8_1934_PB1_55_80", "A_PuertoRico_8_1934_PA_206_232", "A_PuertoRico_8_1934_PB1_347_1898", "A_PuertoRico_8_1934_PA_299_1834", "A_PuertoRico_8_1934_PA_301_1879", "A_PuertoRico_8_1934_PA_240_1925", "A_PuertoRico_8_1934_PB1_207_2109", "A_PuertoRico_8_1934_HA_141_1485", "A_PuertoRico_8_1934_PB1_162_2110", "A_PuertoRico_8_1934_PB1_195_2165", "A_PuertoRico_8_1934_PB2_163_2152"],
+    "meta_study": ["A_PuertoRico_8_1934_PA_138_2063","A_PuertoRico_8_1934_PA_139_169","A_PuertoRico_8_1934_PA_167_1990","A_PuertoRico_8_1934_PB1_54_98","A_PuertoRico_8_1934_PB1_113_2165","A_PuertoRico_8_1934_PB1_200_2072","A_PuertoRico_8_1934_PB2_109_2152","A_PuertoRico_8_1934_PB2_163_2139","A_PuertoRico_8_1934_PB2_163_2152","A_PuertoRico_8_1934_PB2_177_2141","A_PuertoRico_8_1934_PB2_191_2048"],
+    "principal_A_PuertoRico_8_1934": []
+  }

@@ -36,7 +36,7 @@ if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
 
 from utils import calculate_features, load_data, calculate_target, make_multiclass, apply_cutoff, cutoff_clean, drop_non_numeric, split_data, stratified_undersample, identify_candidates, transform_meta_features, get_sequence_quicker, get_sequence, make_multiclass, _extract_junction_window, DATA_DIR, SEGMENTS, STRAIN_WISE_PUBLICATIONS, STRAIN_WISE_PUB_COLORS, STRAIN_COLORS, SEGMENT_COLORS, PUBLICATIONS
-RESULT_PATH = os.path.abspath(os.path.join(os.getcwd(), '..', '..', 'results',"standard_feature_exploration"))
+RESULT_PATH = os.path.abspath(os.path.join(os.getcwd(), '..', '..', 'results',"exploration"))
 
 ALL_PUBS = ["Alnaji2021", "Pelz2021", "Wang2023", "Wang2020", "Zhuravlev2020", "Kupke2020", "vdHoecke2015", "Alnaji2019", "Mendes2021", "Boussier2020", "Berry2021", "Penn2022", "Lui2019", "Valesano2020", "Sheng2018", "Southgate2019"]
 ALL_STRAINS = ["A_PuertoRico_8_1934", "A_California_07_2009", "A_NewCaledonia_20-JY2_1999", "A_WSN_33", "A_Perth_16_2009", "A_Connecticut_Flu122_2013", "A_turkey_Turkey_1_2005", "A_Anhui_1_2013", "B_Lee_1940", "B_Victoria_504_2000", "B_Brisbane_60_2008", "B_Yamagata_16_1988"]
@@ -79,16 +79,13 @@ def load_strain_data(strain: str, cutoff: int=15, features_to_use: list=FEATURES
 
     :return: Tuple of (data, feature_data, features_cols, intersecting_ids)
     '''
-    # getting experimental data for given strain
     data = load_data(STRAIN_TO_PUBS[strain], unpooled=True)
     data = data[data["Strain"]==strain]
     data = identify_candidates(data)
 
-    # identifying intersecting IDs before RSC application
     id_group_counts = data.groupby('ID')['Publication'].nunique()
     intersecting_ids = id_group_counts[id_group_counts >= max(2, data["Publication"].nunique() / 2)].index.tolist()
 
-    # applying RSC cutoff and calculating features
     data = cutoff_clean(data, cutoff, minimum_dataset_size=0).reset_index(drop=True)
     feature_data = calculate_features(data.drop_duplicates("ID").reset_index(drop=True), standard_features=features_to_use, inplace=False, scale="none", normalize_by_length=False)
     feature_data["Start_normalized"] = feature_data["Start"]/feature_data["Full_Sequence"].transform(len)
@@ -142,7 +139,6 @@ def load_synthetic(names: list, include_publication: bool = True, unpooled = Fal
                 pub = pub.split('_')[0]
             if pub == "vdHoecke2015":
                 pub = "VdHoecke2015"
-            #index = csv_paths.index(file_path)
             df['Publication'] = pub
         return df
 
@@ -153,13 +149,12 @@ def load_synthetic(names: list, include_publication: bool = True, unpooled = Fal
     final_df["End"] = final_df["End"].astype(int)
     final_df["NGS_read_count"] = final_df["NGS_read_count"].astype(int)
     logging.debug(f'Datatypes:\n{final_df.dtypes}')
-    #get_duplicates(final_df)
 
     return final_df
 
 def create_sampling_space(seq: str, s: Tuple[int, int], e: Tuple[int, int])-> pd.DataFrame:
     '''
-    Creates all possible candidates that would be expected.
+    Creates all possible candidates that would be expected. Taken from Lohmann et al. 2025
     :param seq: RNA sequence
     :param s: tuple with start and end point of the range for the artifical
                 start point of the deletion sites
@@ -168,20 +163,15 @@ def create_sampling_space(seq: str, s: Tuple[int, int], e: Tuple[int, int])-> pd
     
     :return: dataframe with possible DelVG candidates
     '''
-    # create all combinations of start and end positions that are possible
     combinations = [(x, y) for x in range(s[0], s[1]+1) for y in range(e[0], e[1]+1)]
 
-    # create for each the DelVG Sequence
     sequences = [seq[:start] + seq[end-1:] for (start, end) in combinations]
 
-    # filter out duplicate DelVG sequences while keeping the ones with highest start number
     start, end = zip(*combinations)
     temp_df = pd.DataFrame(data=dict({"Start": start, "End": end, "Sequence": sequences}))
 
-    # Find the index of the row with the maximum value in the "Start" column for each "Sequence"
     max_start_index = temp_df.groupby("Sequence")["Start"].idxmax()
     result_df = temp_df.loc[max_start_index]
-    # Replicate each row by the number of times it was found in the group
     result_df = result_df.loc[result_df.index.repeat(temp_df.groupby("Sequence").size())]
     df_no_duplicates = result_df.reset_index(drop=True).drop("Sequence", axis=1)
 
@@ -189,32 +179,32 @@ def create_sampling_space(seq: str, s: Tuple[int, int], e: Tuple[int, int])-> pd
 
 def generate_sampling_data(seq: str, s: Tuple[int, int], e: Tuple[int, int],  n: int)-> pd.DataFrame:
     '''
-        Generates sampling data by creating random start and end points for
-        artificial deletion sites. Generated data is used to calculate the
-        expected values.
-        :param seq: RNA sequence
-        :param s: tuple with start and end point of the range for the artifical
-                  start point of the deletion sites
-        :param e: tuple with start and end point of the range for the artifical
-                  end point of the deletion sites
-        :param n: number of samples to generate
+    Generates sampling data by creating random start and end points for
+    artificial deletion sites. Generated data is used to calculate the
+    expected values. Taken from Lohmann et al. 2025
+    :param seq: RNA sequence
+    :param s: tuple with start and end point of the range for the artifical
+                start point of the deletion sites
+    :param e: tuple with start and end point of the range for the artifical
+                end point of the deletion sites
+    :param n: number of samples to generate
 
-        :return: Pandas DataFrame of the artifical data set
+    :return: Pandas DataFrame of the artifical data set
     '''
     df_no_duplicates = create_sampling_space(seq, s, e)
     return df_no_duplicates.sample(n)
 
 def generate_expected_data(strain: str, df: pd.DataFrame, cutoff: int=15, seg_sample_size: int=35000, force_recreate: bool=False, multi_source: bool=True)-> pd.DataFrame:
     '''
-        Randomly samples deletion sites for a given dataset which can be used
-        to compare the results of the real dataset.
-        :param strain: name of the strain
-        :param df: DelVG dataset
-        :param cutoff: minimum number of deletions required for a site to be considered
-        :param seg_sample_size: number of samples to generate per segment
-        :param force_recreate: whether to force recreation of the synthetic dataset
+    Randomly samples deletion sites for a given dataset which can be used
+    to compare the results of the real dataset. Taken from Lohmann et al. 2025
+    :param strain: name of the strain
+    :param df: DelVG dataset
+    :param cutoff: minimum number of deletions required for a site to be considered
+    :param seg_sample_size: number of samples to generate per segment
+    :param force_recreate: whether to force recreation of the synthetic dataset
 
-        :return: artifical dataset that includes random deletion sites
+    :return: artifical dataset that includes random deletion sites
     '''
 
     def get_all_segment_samples(sub_data):
@@ -229,7 +219,6 @@ def generate_expected_data(strain: str, df: pd.DataFrame, cutoff: int=15, seg_sa
             s = (max(start-200, 50), start+200)
             e = (end-200, min(end+200, len(seq)-50))
             
-            # skip if there is no range given this would lead to oversampling of a single position
             if s[0] == s[1] or e[0] == e[1]:
                 continue
             if samp_df is not None:
@@ -311,7 +300,6 @@ def plot_segwise_intercount_cutoff_effect(segwise_results_df, log=True, name_pre
     for seg in  ALL_SEGMENTS:
             seg_data = segwise_results_df[segwise_results_df["Segment"]==seg]
             ax = sns.lineplot(data=seg_data, x="Cutoff", y="Intersecting_IDs", marker='o', label=f"{seg}", color=seg_colors.get(seg, "grey"), ax=ax)
-            #sns.lineplot(data=seg_data, x="Cutoff", y="Total_IDs", marker='o', label=f"Total unique DelVGs - {seg}")
     if log:
         ax.set_yscale("log")
     ax.set_title(title)
@@ -334,7 +322,6 @@ def plot_segwise_combined_cutoff_effect(cutoff_results_df, segwise_results_df, l
     '''
     sns.set_theme(style="darkgrid", context="notebook", palette="colorblind")
     fig, axes = plt.subplots(1, 2, figsize=(12, 4), layout="constrained")
-    # Overall plot
     sns.lineplot(data=cutoff_results_df, x="Cutoff", y="Intersecting_IDs", marker='o', label="Intersecting DelVGs", ax=axes[0])
     sns.lineplot(data=cutoff_results_df, x="Cutoff", y="Total_IDs", marker='o', label="Total DelVGs", ax=axes[0])
     if log:
@@ -355,7 +342,6 @@ def plot_segwise_combined_cutoff_effect(cutoff_results_df, segwise_results_df, l
     axes[1].set_ylabel("Number of intersecting DelVGs")
     axes[1].set_xticks([5, 10, 15, 20])
     plt.suptitle(title)
-    #plt.xticks(cutoff_results_df["Cutoff"].unique())
     if path != "":
         os.makedirs(path, exist_ok=True)
         plt.savefig(os.path.join(path, f"{name_prefix}cutoff_effect_on_intersecting_counts_segwise_combined.png"), dpi=300)
@@ -371,7 +357,6 @@ def plot_pubwise_intersecting_counts(pub_wise_intersecting_counts_df, title="Int
     if ax is None:
         plt.figure(figsize=(6, 4))
     colors = STRAIN_WISE_PUB_COLORS.get(STRAIN, sns.color_palette("colorblind"))
-    #colors = {pub: color for pub, color in zip(STRAIN_TO_PUBS.get(STRAIN, []), sns.color_palette("Set2", len(STRAIN_TO_PUBS.get(STRAIN, []))))}
     for pub in pub_wise_intersecting_counts_df.columns:
         ax = sns.lineplot(data=pub_wise_intersecting_counts_df, x=pub_wise_intersecting_counts_df.index, y=pub, marker='o', label=f"{pub}", color=colors.get(pub, "grey"), ax=ax)
     if log:
@@ -396,7 +381,6 @@ def plot_cutoff_pub_coverage(cutoff_results_df, log=True, title="Dataset coverag
         plt.figure(figsize=(6, 4))
         ax = plt.gca()
     pub_counts_cols = [col for col in cutoff_results_df.columns if col not in ["Cutoff", "Total_IDs"] and col > 0]
-    #colors = {cover: colors for cover, colors in zip(sorted(pub_counts_cols), sns.color_palette("Spectral", len(pub_counts_cols)))}
     colors = {cover: colors for cover, colors in zip(sorted(pub_counts_cols), sns.diverging_palette(10, 220, s=100, l=75, n=len(pub_counts_cols), center="dark"))}
     
     for col in sorted(pub_counts_cols):
@@ -441,9 +425,7 @@ def cutoff_inter_pipeline(strain, cutoffgrid, ver="corrected", save_plots=False)
     pre_seg_wise_results = []
     post_seg_wise_results = []
     pub_wise_intersecting_counts = {}
-    #prog_display = display(f"Processing strain: {strain}", display_id=True)
     for cutoff in cutoffgrid:
-        #prog_display.update(f"Processing strain: {strain} | Cutoff: {cutoff}")
         cutoff_data = cutoff_clean(data, cutoff, minimum_dataset_size=0).reset_index(drop=True)
         pre_cutoff_results.append({"Cutoff": cutoff, "Total_IDs": len(cutoff_data["ID"].unique()), "Intersecting_IDs": cutoff_data[cutoff_data["ID"].isin(all_intersecting_ids)]["ID"].nunique()})
         id_cutoff_counts[f'Cutoff {cutoff}'] = 0
@@ -456,11 +438,9 @@ def cutoff_inter_pipeline(strain, cutoffgrid, ver="corrected", save_plots=False)
             intersecting_ids = id_group_counts[id_group_counts >= max(2, data["Publication"].nunique() / 2)].index.tolist()
         post_cutoff_results.append({"Cutoff": cutoff, "Total_IDs": len(cutoff_data["ID"].unique()), "Intersecting_IDs": len(intersecting_ids)})
         pub_wise_intersecting_counts[cutoff] = {}
-        #prog_display.update(f"Processing strain: {strain} | Cutoff: {cutoff} | Calculating publication-wise intersecting counts")
         for pub in STRAIN_TO_PUBS[strain]:
             pub_wise_intersecting_counts[cutoff][pub] = cutoff_data[(cutoff_data["Publication"]==pub) & (cutoff_data["ID"].isin(all_intersecting_ids))]["ID"].nunique()
         for seg in ALL_SEGMENTS:
-            #prog_display.update(f"Processing strain: {strain} | Cutoff: {cutoff} | Segment: {seg}")
             seg_data = cutoff_data[cutoff_data["Segment"]==seg]
             seg_id_counts = seg_data.groupby('ID')['Publication'].nunique()
             if ver=="a":
@@ -468,9 +448,7 @@ def cutoff_inter_pipeline(strain, cutoffgrid, ver="corrected", save_plots=False)
             else:
                 seg_intersecting_ids = seg_id_counts[seg_id_counts >= max(2, data["Publication"].nunique() / 2)].index.tolist()
             post_seg_wise_results.append({"Cutoff": cutoff, "Segment": seg, "Total_IDs": len(seg_data["ID"].unique()), "Intersecting_IDs": len(seg_intersecting_ids)})
-            pre_seg_wise_results.append({"Cutoff": cutoff, "Segment": seg, "Total_IDs": len(seg_data["ID"].unique()), "Intersecting_IDs": seg_data[seg_data["ID"].isin(all_intersecting_ids)]["ID"].nunique()})  # len([id for id in all_intersecting_ids if id in seg_data["ID"].values])})
-    
-    #prog_display.update(f"Processing strain: {strain} | Calculating publication-coverages")
+            pre_seg_wise_results.append({"Cutoff": cutoff, "Segment": seg, "Total_IDs": len(seg_data["ID"].unique()), "Intersecting_IDs": seg_data[seg_data["ID"].isin(all_intersecting_ids)]["ID"].nunique()})
     pub_coverage = []
     for cutoff in cutoffgrid:
         pub_counts = id_cutoff_counts.loc[all_intersecting_ids, f'Cutoff {cutoff}']
@@ -478,7 +456,6 @@ def cutoff_inter_pipeline(strain, cutoffgrid, ver="corrected", save_plots=False)
         cur_res.update({"Cutoff": cutoff, "Total_IDs": len(pub_counts[pub_counts>0])})
         pub_coverage.append(cur_res)
 
-    #prog_display.update(f"Completed processing for strain: {strain}")
     pre_cutoff_results_df = pd.DataFrame(pre_cutoff_results)
     post_cutoff_results_df = pd.DataFrame(post_cutoff_results)
     post_seg_wise_results_df = pd.DataFrame(post_seg_wise_results)
@@ -545,7 +522,7 @@ def cliffs_delta(x, y):
     if len(x) == 0 or len(y) == 0:
         return np.nan
 
-    # Exact pairwise comparison; suitable for moderate sample sizes
+    # Exact pairwise comparison is more suitable for moderate sample sizes
     gt = np.sum(x[:, None] > y[None, :])
     lt = np.sum(x[:, None] < y[None, :])
     return (gt - lt) / (len(x) * len(y))
@@ -647,7 +624,6 @@ def run_feature_cutoff_pipeline(feature, strain, cutoffs, pubs_by_strain=None, a
             })
             continue
 
-        # features per unique ID
         f = calculate_features(
             d.drop_duplicates("ID").reset_index(drop=True),
             standard_features=FEATURES_TO_USE,
@@ -656,7 +632,6 @@ def run_feature_cutoff_pipeline(feature, strain, cutoffs, pubs_by_strain=None, a
             normalize_by_length=False
         )
 
-        # normalized features (same logic used earlier in notebook)
         seq_len = f["Full_Sequence"].str.len()
         f["Start_normalized"] = f["Start"] / seq_len
         f["End_normalized"] = f["End"] / seq_len
@@ -682,7 +657,6 @@ def run_feature_cutoff_pipeline(feature, strain, cutoffs, pubs_by_strain=None, a
             })
             continue
 
-        # get aggregated values to check group sizes
         agg_df, _ = aggregate_id_features(f, feature_cols=[feature], id_col="ID", agg=agg)
         agg_df["is_intersecting"] = agg_df["ID"].isin(set(inter_ids))
         x = agg_df.loc[agg_df["is_intersecting"], feature].dropna().values
@@ -704,7 +678,6 @@ def run_feature_cutoff_pipeline(feature, strain, cutoffs, pubs_by_strain=None, a
             })
             continue
 
-        # run both tests via existing helper
         res_mw = compare_intersecting_vs_nonintersecting(
             feature_df=f,
             intersecting_ids=inter_ids,
@@ -744,13 +717,9 @@ def run_feature_cutoff_pipeline(feature, strain, cutoffs, pubs_by_strain=None, a
         })
 
         if seg_wise:
-            for seg in ALL_SEGMENTS:#f["Segment"].unique():
+            for seg in ALL_SEGMENTS:
                 seg_df = f[f["Segment"] == seg]
                 seg_intersecting_ids = [id_ for id_ in inter_ids if id_ in seg_df["ID"].values]
-                #if len(seg_intersecting_ids) < min_group_n:
-                    #print(f"Segment {seg} has only {len(seg_intersecting_ids)} intersecting IDs at cutoff {c}; skipping statistical test.")
-                    #continue
-                # run both tests via existing helper
                 if seg_df.empty:
                     rows.append({
                         "category": f"Segment {seg}",
@@ -821,7 +790,6 @@ def run_feature_cutoff_pipeline(feature, strain, cutoffs, pubs_by_strain=None, a
 
     out = pd.DataFrame(rows).sort_values("cutoff").reset_index(drop=True)
 
-    # BH correction across cutoffs
     if "mannwhitney_p" in out.columns:
         out["mannwhitney_p_adj_bh"] = benjamini_hochberg(out["mannwhitney_p"].fillna(1.0).values)
     if "ttest_p" in out.columns:
@@ -836,9 +804,7 @@ def execute_numeric_feature_cutoff_pipeline_per_strain(cutoff_grid=[0,5,10,15], 
     for strain in strain_to_pubs.keys():
         logging.info(f"Running feature cutoff pipeline for strain: {strain}")
         cutoff_grid = [0, 5, 10, 15]
-        #feature_name = "Direct_repeat"#"length_proportion"  # change to any numeric feature in feature table
         for feature_name in features_cols:
-            #logging.info(f"Processing feature: {feature_name}")
             feature_cutoff_results = run_feature_cutoff_pipeline(
                 feature=feature_name,
                 strain=strain,
@@ -852,8 +818,6 @@ def execute_numeric_feature_cutoff_pipeline_per_strain(cutoff_grid=[0,5,10,15], 
                 logging.info(f"All cutoffs for feature '{feature_name}' in strain '{strain}' had issues; skipping save.")
                 continue
             if len(feature_cutoff_results[feature_cutoff_results["mannwhitney_p_adj_bh"]<0.05]) >= 2:
-                #logging.info(f"Significant results for feature '{feature_name}' in strain '{strain}':")
-                #logging.info(feature_cutoff_results[feature_cutoff_results["mannwhitney_p_adj_bh"]<0.05])
                 significant_combinations.append((strain, feature_name, feature_cutoff_results[feature_cutoff_results["mannwhitney_p_adj_bh"]<0.05].shape[0]))
                 significant_results[(strain, feature_name)] = feature_cutoff_results[feature_cutoff_results["mannwhitney_p_adj_bh"]<0.05]
             try:
@@ -997,11 +961,6 @@ def plot_segment_boxplots(plot_df, intersecting_ids, feature, n_cols=3, y_label=
         else:
             seg_df = plot_df[plot_df["Segment"] == seg]
         axes[i] = get_boxplot_ax(seg_df, feature, ax=axes[i], title=f"{title_prefix}{seg}", y_label=y_label)
-        #sns.boxplot(x="Group", y=feature, data=seg_df, ax=ax, showfliers=False, order=["Intersecting", "Non-intersecting"])
-        #ax.set_title(f"{title_prefix}{seg}")
-        #ax.tick_params(axis="x", rotation=0)
-        #ax.set_xlabel("")
-        #ax.set_ylabel(y_label)
 
     for j in range(i + 1, len(axes)):
         axes[j].axis("off")
@@ -1040,7 +999,7 @@ def plot_segwise_distributions(feature_data, intersecting_ids, feature_cols, seg
         test_results = compare_intersecting_vs_nonintersecting(
                 feature_df=feature_data,
                 intersecting_ids=seg_intersecting_ids,
-                feature_cols=feature_cols,   # includes non-numeric cols; function filters automatically
+                feature_cols=feature_cols,
                 id_col="ID",
                 agg="median",
                 test="mannwhitney",
@@ -1049,7 +1008,7 @@ def plot_segwise_distributions(feature_data, intersecting_ids, feature_cols, seg
         plot_df, numeric_cols = prepare_intersection_plot_data(
             feature_df=feature_data,
             intersecting_ids=seg_intersecting_ids,
-            feature_cols=feature_cols,   # already available
+            feature_cols=feature_cols,
             id_col="ID",
             agg="median"
         )
@@ -1057,13 +1016,10 @@ def plot_segwise_distributions(feature_data, intersecting_ids, feature_cols, seg
     for seg in segments:
         seg_df = feature_data[feature_data["Segment"] == seg]
         seg_intersecting_ids = [id_ for id_ in intersecting_ids if id_ in seg_df["ID"].values]
-        #if len(seg_intersecting_ids) < 3:
-        #    print(f"Segment {seg} has only {len(seg_intersecting_ids)} intersecting IDs; skipping statistical test.")
-        #    continue
         test_results = compare_intersecting_vs_nonintersecting(
                 feature_df=seg_df,
                 intersecting_ids=seg_intersecting_ids,
-                feature_cols=feature_cols,   # includes non-numeric cols; function filters automatically
+                feature_cols=feature_cols,
                 id_col="ID",
                 agg="median",
                 test="mannwhitney",
@@ -1072,7 +1028,7 @@ def plot_segwise_distributions(feature_data, intersecting_ids, feature_cols, seg
         plot_df, numeric_cols = prepare_intersection_plot_data(
             feature_df=seg_df,
             intersecting_ids=seg_intersecting_ids,
-            feature_cols=feature_cols,   # already available
+            feature_cols=feature_cols,
             id_col="ID",
             agg="median"
         )
@@ -1095,11 +1051,8 @@ def plot_segwise_distributions(feature_data, intersecting_ids, feature_cols, seg
                 logging.info(f"  - Segment {seg}: p_adj_bh={row['p_adj_bh']:.4f}, significant={row['significant']}, cliffs_delta={row['effect_cliffs_delta']:.3f}")
             else:
                 logging.info(f"  - Segment {seg}: feature not found in results")
-        # generate plot_df for this feature across segments
         plot_df = pd.concat([seg_wise_plots[seg][["ID", "Group", feature if seg!="All" else cur_feature]].assign(Segment=seg) for seg in seg_wise_plots], ignore_index=True)
-        #display(plot_df)
         plot_segment_boxplots(plot_df, intersecting_ids, feature, y_label=get_y_label(feature), segments=["All"]+segments if add_all else segments, path=path, **kwargs)
-        #break  # remove this break to plot all features; currently just plotting the first one for demonstration
         
 def execute_boxplotting_per_strain(cutoff_grid=[0, 5, 10, 15], segments=ALL_SEGMENTS, add_all=True, **kwargs):
     logging.info("Making boxplots for numeric features...")
@@ -1114,7 +1067,7 @@ def execute_boxplotting_per_strain(cutoff_grid=[0, 5, 10, 15], segments=ALL_SEGM
             data = cutoff_clean(data, cutoff, minimum_dataset_size=0).drop_duplicates("ID").reset_index(drop=True)
             remaining_intersecting_ids = [id_ for id_ in intersecting_ids if id_ in data["ID"].unique()]
             feature_data = calculate_features(data.drop_duplicates("ID").reset_index(drop=True), standard_features=FEATURES_TO_USE, inplace=False, scale="none", normalize_by_length=False)
-            if add_all: # normalize features by sequence length for better cross-segment comparison
+            if add_all:
                 feature_data["Start_normalized"] = feature_data["Start"] / feature_data["Full_Sequence"].str.len()
                 feature_data["End_normalized"] = feature_data["End"] / feature_data["Full_Sequence"].str.len()
                 for col in ["remaining_length", "deletion_length", "Peptide_Length", "3_len", "5_len"]:
@@ -1130,11 +1083,11 @@ def execute_boxplotting_per_strain(cutoff_grid=[0, 5, 10, 15], segments=ALL_SEGM
 ########   Functions for nucleotide enrichment analysis and plotting    ########
 def create_nucleotide_ratio_matrix(df: pd.DataFrame, col: str)-> pd.DataFrame:
     '''
-        Counts nucleotides around the deletion site. Used to create heatmaps.
-        :param df: Pandas DataFrame that was created using sequence_df()
-        :param col: column name which sequence to use
+    Counts nucleotides around the deletion site. Used to create heatmaps.
+    :param df: Pandas DataFrame that was created using sequence_df()
+    :param col: column name which sequence to use
 
-        :return: Pandas DataFrame with probabilites for the nucleotides
+    :return: Pandas DataFrame with probabilites for the nucleotides
     '''
     probability_matrix = pd.DataFrame(columns=NUCLEOTIDES.keys())
     seq_matrix = df.filter([col], axis=1)
@@ -1150,16 +1103,15 @@ def create_nucleotide_ratio_matrix(df: pd.DataFrame, col: str)-> pd.DataFrame:
 def plot_heatmap(y: list, x: list, vals: list, ax: object,
                  format=".2f", cmap="coolwarm", vmin=0, vmax=1, cbar=False, cbar_ax=None, cbar_kws=None)-> object:
     '''
-        Helper function to plot heatmap.
-        :param y: columns of heatmap
-        :param x: rows of heatmap
-        :param vals: values for heatmap
-        :param ax: matplotlib.axes object
-        :param: additional parameters check sns.heatmap() for more information
-        
-        :return: generated heatmap on matplotlib.axes object
+    Helper function to plot heatmap.
+    :param y: columns of heatmap
+    :param x: rows of heatmap
+    :param vals: values for heatmap
+    :param ax: matplotlib.axes object
+    :param: additional parameters check sns.heatmap() for more information
+    
+    :return: generated heatmap on matplotlib.axes object
     '''
-    #sns.set_theme(style="darkgrid", context="notebook", palette="colorblind")
     df = pd.DataFrame({"x":x,"y":y,"vals":vals})
     df = pd.pivot_table(df, index="x", columns="y", values="vals", sort=False)
     ax = sns.heatmap(df, fmt=format, annot=True, vmin=vmin, vmax=vmax, ax=ax, cbar=cbar, cmap=cmap, cbar_ax=cbar_ax, cbar_kws=cbar_kws, square=True)
@@ -1253,12 +1205,10 @@ def get_stat_result(test_array, test_array2, test: str="kruskal"):
         case "mannwhitney":
             res = stats.mannwhitneyu(test_array, test_array2)
         case "fisherexact":
-            #contingency_table = get_contingency_table(test_array, test_array2)
             table = np.array([[len(test_array == 0), len((test_array == 1))],
                               [len(test_array2 == 0), len((test_array2 == 1))]])
             res = stats.fisher_exact(table)
         case "chisquare":
-            #contingency_table = get_contingency_table(test_array, test_array2)
             table = np.array([[len(test_array == 0), len((test_array == 1))],
                               [len(test_array2 == 0), len((test_array2 == 1))]])
             res = stats.chi2_contingency(table)
@@ -1291,12 +1241,12 @@ def get_effect_size(statistic, effect_size: str="eta2", n_samples: int=0, n_samp
         case "cliff"|"cliffs"|"cliff_delta"|"cliffs_delta"|"delta":
             return get_cliffs_delta(statistic, n_samples, n_samples2)
         case "cramer"|"cramers"|"cramer_v"|"cramers_v"|"v":
-            return get_carmers_v(statistic, n_samples + n_samples2, 2)  # assuming 2x2 contingency table for Cramér's V
+            return get_carmers_v(statistic, n_samples + n_samples2, 2)
         case _:
             logging.error(f"Unknown effect size type '{effect_size}'; defaulting to 'eta2'")
             return get_eta_squared(statistic, 2, n_samples)
 
-def get_effect_size_text(val: float|None=None, effect_size: str|None=None, pval: float|None=None, max_pval: float=0.05, **kwargs):#, statistic: float|None=None, n_samples: int=0, n_samples2: int=0):
+def get_effect_size_text(val: float|None=None, effect_size: str|None=None, pval: float|None=None, max_pval: float=0.05, **kwargs):
     '''
     Returns the effect size as a formatted string if the p-value is below the specified threshold and the effect size exceeds commonly used thresholds for small/moderate/large effects. Otherwise, returns an empty string. If no value is provided, the function will attempt to calculate it from the test statistic and sample sizes, assuming the necessary parameters are provided as keyword arguments. Thresholds for a small or greater effect are based on common conventions in the literature:
      - eta squared >= 0.06 (moderate or greater effect)
@@ -1405,7 +1355,7 @@ def nuc_enrich_stats(test_array, test_array2, test: str="kruskal", effect_size: 
                                 text = text[1:] if delta > 0 else "-" + text[2:]
                             else:
                                 text = f"{abs(delta):.2f}"
-                                text = text[1:]# if delta > 0 else text[2:]
+                                text = text[1:]
                     case _:
                         logging.warning(f"Unknown effect size version '{effect_size}'; defaulting to 'delta'")
                         delta = get_cliffs_delta(res.statistic, n_samples, n_samples2)
@@ -1415,7 +1365,7 @@ def nuc_enrich_stats(test_array, test_array2, test: str="kruskal", effect_size: 
                                 text = text[1:] if delta > 0 else "-" + text[2:]
                             else:
                                 text = f"{abs(delta):.2f}"
-                                text = text[1:]# if delta > 0 else text[2:]
+                                text = text[1:]
     return text
 
 def plot_expected_vs_observed_nucleotide_enrichment_heatmaps(dfs: list, dfnames: list, expected_dfs: list, compared: str, test: str="kruskal", name_prefix: str="", path: str="", effect_size: str="eta2", scale: float=1.0, show_strain_brackets: bool=False)-> None:
@@ -1442,7 +1392,6 @@ def plot_expected_vs_observed_nucleotide_enrichment_heatmaps(dfs: list, dfnames:
     sns.set_theme(style="darkgrid", context="notebook", palette="colorblind")
     fig, axs = plt.subplots(figsize=(width, height), nrows=2, ncols=2)
     axs = axs.flatten()
-    #res_display = display("Statistical test results:", display_id=True)
     strain_groups = []
     if show_strain_brackets:
         strain_labels = [_extract_strain_label(df, dfname) for dfname, df in zip(dfnames, dfs)]
@@ -1471,7 +1420,7 @@ def plot_expected_vs_observed_nucleotide_enrichment_heatmaps(dfs: list, dfnames:
 
                 stat_res = get_stat_result(test_array, test_array2, test=test)
                 effect_size_res = get_effect_size(statistic=stat_res.statistic, effect_size=effect_size, n_samples=n_samples, n_samples2=n_samples2)
-                text = get_effect_size_text(val=effect_size_res, effect_size=effect_size, pval=stat_res.pvalue, threshold_overwrite=0)# if effect_size=="delta" else None)
+                text = get_effect_size_text(val=effect_size_res, effect_size=effect_size, pval=stat_res.pvalue, threshold_overwrite=0)
                 val_labels.append(text)
 
         if len(vals) != 0:        
@@ -1497,9 +1446,9 @@ def plot_expected_vs_observed_nucleotide_enrichment_heatmaps(dfs: list, dfnames:
         indexes = [pos for pos in range(1, quarter * 2 + 1)]
         if i % 2 == 0:
             if show_strain_brackets:
-                axs[i].set_yticklabels([f"{dfname.split('_')[0]} ({len(df)})" for dfname,df in zip(dfnames,dfs)])#, fontsize=8)
+                axs[i].set_yticklabels([f"{dfname.split('_')[0]} ({len(df)})" for dfname,df in zip(dfnames,dfs)])
             else:
-                axs[i].set_yticklabels([f"{dfname} ({len(df)})" for dfname,df in zip(dfnames,dfs)])#, fontsize=8)
+                axs[i].set_yticklabels([f"{dfname} ({len(df)})" for dfname,df in zip(dfnames,dfs)])
             axs[i].tick_params(axis="y", pad=8)
             if show_strain_brackets:
                 _draw_strain_brackets(axs[i], strain_groups, text_offset=0.02)
@@ -1518,19 +1467,13 @@ def plot_expected_vs_observed_nucleotide_enrichment_heatmaps(dfs: list, dfnames:
             else:
                 xlabel.set_color("grey")   
 
-    #fig.suptitle("Enriched (red) and depleted (blue) nucleotides")
     strain_labels = set([_extract_strain_label(df, dfname) for dfname, df in zip(dfnames, dfs)])
     fig.suptitle(f"{list(strain_labels)[0].replace('_', '/')} - Nucleotide Enrichment\n({compared.replace("_"," ")})")
-    #ax.set_title(f'({compared})')
     if show_strain_brackets:
         fig.tight_layout(rect=[0.26, 0.0, 1.0, 0.96])
     else:
         fig.tight_layout(rect=[0.06, 0.0, 1.0, 0.96])
     if path != "":
-        #save_path = os.path.join(path, f"nucleotide_enrichment_{compared}")
-        #if not os.path.exists(save_path):
-        #    os.makedirs(save_path)
-        #plt.savefig(os.path.join(save_path, f"nuc_occ_diff.png"), dpi=300)
         plt.savefig(os.path.join(path, f"{name_prefix}_ds_nuc_occ_diff.png"), dpi=300)
     else:
         plt.show()
@@ -1571,7 +1514,6 @@ def prepare_nucleotide_enrichment_heatmap_data(strain, cutoff, pub_overwrite=Non
 
 def compare_jens_vs_me():    
     dfs, dfnames, expected_dfs = prepare_nucleotide_enrichment_heatmap_data("A_PuertoRico_8_1934", cutoff=15, own_synthetic=True)
-    #dfs, dfnames, expected_dfs = prepare_nucleotide_enrichment_heatmap_data("A_PuertoRico_8_1934", cutoff=15)
     plot_expected_vs_observed_nucleotide_enrichment_heatmaps(dfs, dfnames, expected_dfs, compared="synthetic_vs_experimental", path="", version="jens")
     plot_expected_vs_observed_nucleotide_enrichment_heatmaps(dfs, dfnames, expected_dfs, compared="synthetic_vs_experimental", path="", version="me")
     plot_expected_vs_observed_nucleotide_enrichment_heatmaps(dfs, dfnames, expected_dfs, compared="synthetic_vs_experimental", path="", test="mannwhitney", version="r")
@@ -1598,7 +1540,7 @@ def prepare_inter_nucleotide_enrichment_heatmap_data(strain, cutoff, pub_overwri
     intersecting_ids = intersecting_ids[intersecting_ids >= max(2, df["Publication"].nunique() / 2)].index.tolist()
     if kwargs.get("only_cleaned_intersecting", True): # get only intersecting DVG that survive the cutoff
         df = cutoff_clean(df, threshold=cutoff, minimum_dataset_size=0)
-    else: # get all intersecting DVG in pub, independent of cutoff
+    else:
         df = cutoff_clean(df, threshold=cutoff, minimum_dataset_size=0, left_out_ids=intersecting_ids)
     df = get_sequence_quicker(df)
     df["junction_window"] = df.apply(lambda row: _extract_junction_window(row["Full_Sequence"], row["Start"], row["End"]), axis=1).transform(lambda x: x.replace("|", ""))
@@ -1623,7 +1565,6 @@ def prepare_inter_nucleotide_enrichment_heatmap_data(strain, cutoff, pub_overwri
         synthetic_dfs.append(synthetic_data)
         non_intersecting_dfs.append(experimental_data[~experimental_data["ID"].isin(intersecting_ids)].reset_index(drop=True))
         dfnames.append(get_datasetname(strain, pub))
-        #if kwargs.get("only_cleaned_intersecting", True): # get only intesecting DVG that survive cutoff
         intersecting_dfs.append(experimental_data[experimental_data["ID"].isin(intersecting_ids)].reset_index(drop=True))
     return non_intersecting_dfs, dfnames, intersecting_dfs, synthetic_dfs
 
@@ -1687,7 +1628,7 @@ def per_dataset_nucleotide_plots(non_intersecting_dfs, dfnames, intersecting_dfs
 
 def single_strain_nucleotide_plots(non_intersecting_df, intersecting_df, background_df, strain, strain_path="", test_combs=None, scale: float=1.0, correct_p: bool=False, debug=False):
     if debug or test_combs is None:
-        test_combs = [("mannwhitney", "delta")]  # Replace with actual test combinations'
+        test_combs = [("mannwhitney", "delta")]
     for test, effect_size in test_combs:
         logging.info(f"Plotting for strain '{strain}', test '{test}' and effect size '{effect_size}'")
         prefix = f'{test}_{effect_size}_'
@@ -1763,61 +1704,6 @@ def plot_strain_nucleotide_enrichment_heatmap(df: pd.DataFrame, dfname: str, bac
             
             test_array = np.concatenate((np.ones(int(n_samples * p1)), np.zeros(int(n_samples - n_samples * p1))))
             test_array2 = np.concatenate((np.ones(int(n_samples2 * p2)), np.zeros(int(n_samples2 - n_samples2 * p2))))
-            '''
-            if test == "kruskal":
-                res = stats.kruskal(test_array, test_array2)
-            elif test == "mannwhitney":
-                res = stats.mannwhitneyu(test_array, test_array2)
-            pval = res.pvalue
-            
-            # calculate effect size based on version
-            if pval < 0.05:
-                if test == "kruskal":
-                    if version == "jens":
-                        eta = get_eta_squared(res.statistic, 2, n_samples)
-                    if version == "me":
-                        eta = get_eta_squared(res.statistic, 2, n_samples + n_samples2)
-                    if eta > 0.06:
-                        text = f"{eta:.2f}"
-                        text = text[1:]
-                        #res_display.update(f"Statistical test results: {dfname} - nucleotide {nuc} position {j} - res: {res}, eta: {eta:.3f}")
-                    else:
-                        text = ""
-                elif test == "mannwhitney":
-                    if version == "r":
-                        r = get_pearson_r(res.statistic, n_samples, n_samples2)
-                        if abs(r) > 0.15:
-                            if scale >= 1.0:
-                                text = f"{r:.2f}"
-                                text = text[1:] if r > 0 else "-" + text[2:]
-                            else:
-                                text = f"{abs(r):.2f}"
-                                text = text[1:]
-                            #res_display.update(f"Statistical test results: {dfname} - nucleotide {nuc} position {j} - res: {res}, r: {r:.3f}")
-                        else:
-                            text = ""
-                    if version == "r2":
-                        r2 = get_r2(res.statistic, n_samples, n_samples2)
-                        if abs(r2) > 0.06:
-                            text = f"{r2:.2f}"
-                            text = text[1:]
-                            #res_display.update(f"Statistical test results: {dfname} - nucleotide {nuc} position {j} - res: {res}, r2: {r2:.3f}")
-                        else:
-                            text = ""
-                    if version == "delta":
-                        delta = get_cliffs_delta(res.statistic, n_samples, n_samples2)
-                        if abs(delta) > 0.14:
-                            if scale >= 1.0:
-                                text = f"{delta:.2f}"
-                                text = text[1:] if delta > 0 else "-" + text[2:]
-                            else:
-                                text = f"{abs(delta):.2f}"
-                                text = text[1:]# if delta > 0 else text[2:]
-                            #res_display.update(f"Statistical test results: {dfname} - nucleotide {nuc} position {j} - res: {res}, delta: {delta:.3f}")
-                        else:
-                            text = ""
-            else:
-                text = ""'''
             
             stat_res = get_stat_result(test_array, test_array2, test=test)
             if correct_for_multiple_comparisons:
@@ -1827,8 +1713,6 @@ def plot_strain_nucleotide_enrichment_heatmap(df: pd.DataFrame, dfname: str, bac
                 effect_size_res = get_effect_size(statistic=stat_res.statistic, n_samples=n_samples, n_samples2=n_samples2, effect_size=effect_size)
                 text = get_effect_size_text(val=effect_size_res, effect_size=effect_size, pval=stat_res.pvalue, overwrite_threshold=0)
                 val_labels.append(text)
-            #text = nuc_enrich_stats(test_array, test_array2, test=test, version=version, scale=scale, n_samples=n_samples, n_samples2=n_samples2)
-            #val_labels.append(text)
     if correct_for_multiple_comparisons:
         corrected_p_values = stats.multitest.multipletests(p_values, method='fdr_bh')[1]
         for p_adj, statistic in zip(corrected_p_values, statistics):
@@ -1843,7 +1727,6 @@ def plot_strain_nucleotide_enrichment_heatmap(df: pd.DataFrame, dfname: str, bac
     
     ax = plot_heatmap(x, y, vals, ax, format=".1e", cbar=True, vmin=-m, vmax=m, cbar_kws={"pad": 0.01})
     
-    # Update annotations with effect size labels
     for v_idx, val_label in enumerate(ax.texts):
         val_label.set_text(val_labels[v_idx])
         val_label.set_size(12)
@@ -1856,7 +1739,6 @@ def plot_strain_nucleotide_enrichment_heatmap(df: pd.DataFrame, dfname: str, bac
     ax.set_yticklabels([nuc for nuc in NUCLEOTIDES.keys()], rotation=0)
     ax.set_xlabel("Position")
     
-    # Set x-axis ticks
     quarter = len(probability_matrix.index) // 4
     indexes = [pos for pos in range(1, quarter * 2 + 1)]
     ax.set_xticks([xtick - 0.5 for xtick in probability_matrix.index])
@@ -1870,7 +1752,6 @@ def plot_strain_nucleotide_enrichment_heatmap(df: pd.DataFrame, dfname: str, bac
             xlabel.set_color("grey")
     
     ax.tick_params(left=False, top=False, bottom=False)
-    #ax.set_title(f"{dfname} - Nucleotide Enrichment ({compared})")
     fig.suptitle(f"{dfname} - Nucleotide Enrichment")
     ax.set_title(f'({compared.replace("_"," ")})')
     fig.tight_layout()
@@ -1912,9 +1793,7 @@ def prepare_strain_data_for_nucleotide_enrichment_heatmap(strain, cutoff, pub_ov
     background_df = identify_candidates(background_df)
     background_df = get_sequence_quicker(background_df)
     background_df["junction_window"] = background_df.apply(lambda row: _extract_junction_window(row["Full_Sequence"], row["Start"], row["End"]), axis=1).transform(lambda x: x.replace("|", ""))
-    #if kwargs.get("only_cleaned_intersecting", True): # get only intesecting DVG that survive cutoff
     intersecting_df = df[df["ID"].isin(intersecting_ids)].drop_duplicates("ID").reset_index(drop=True)
-    #intersecting_df = df[df["ID"].isin(intersecting_ids)].drop_duplicates("ID").reset_index(drop=True)
     non_intersecting_df = df[~df["ID"].isin(intersecting_ids)].drop_duplicates("ID").reset_index(drop=True)
 
     return non_intersecting_df, intersecting_df, background_df
@@ -1931,7 +1810,6 @@ def strain_nucleotide_enrichment_pipeline(cutoff=15, scale=1.0, debug=False):
             strain_path = os.path.join(RESULT_PATH, strain, f'Cutoff {cutoff}', "nucleotide_enrichment")
             os.makedirs(strain_path, exist_ok=True)
         for test, version in test_combs:
-            #display(f"Strain: {strain}, Test: {test}, Version: {version}")
 
             plot_strain_nucleotide_enrichment_heatmap(pd.concat([non_intersecting_df, intersecting_df], ignore_index=True), dfname=strain.replace("_","/"), background_df=background_df, compared="observed vs synthetic", test=test, version=version, path=strain_path, scale=scale, name_prefix=f"{test}_{version}_observed_vs_synthetic_")
 
@@ -1945,7 +1823,6 @@ def strain_nucleotide_enrichment_pipeline(cutoff=15, scale=1.0, debug=False):
 
 def execute_per_strain_nucleotide_enrichment_pipeline(cutoff_grid=[0,5,10,15], own_synthetic=False, save_plots=True, per_strain_scale: float=1.0, per_dataset_scale: float=1.5, correct_p: bool=False, debug=False, **kwargs):
     logging.info("Starting nucleotide enrichment pipeline...")
-    #test_combs = [("kruskal", "meta2"), ("kruskal", "eta2"), ("mannwhitney", "r"), ("mannwhitney", "r2"), ("mannwhitney", "delta"), ("kruskal", "epsilon2"), ("chisquare", "cramers_v")]
     test_combs = [("mannwhitney", "delta"), ("kruskal", "meta2")]
     if debug:
         test_combs = [("mannwhitney", "delta")]
@@ -1978,10 +1855,9 @@ def get_intersection_rates(data) -> pd.DataFrame:
     :param cutoff: Cutoff to apply to data
 
     :return: Dataframe containing intersection rates between publications
-    '''    
-    # creating publication vs publication matrix with intersection rates as values
+    '''
     strain = data["Strain"].unique()[0]
-    pubs = STRAIN_TO_PUBS[strain]  # data["Publication"].unique()
+    pubs = STRAIN_TO_PUBS[strain]
     matrix = pd.DataFrame(0, index=pubs, columns=pubs)
     for pub1 in pubs:
         ids_pub1 = set(data[data['Publication'] == pub1]['ID'])
@@ -1991,7 +1867,6 @@ def get_intersection_rates(data) -> pd.DataFrame:
                 continue
             ids_pub2 = set(data[data['Publication'] == pub2]['ID'])
             intersection_count = len(ids_pub1.intersection(ids_pub2))
-            # Calculate intersection rate (normalized by the second set)
             if len(ids_pub1) == 0 or len(ids_pub2) == 0:
                 intersection_rate = 0
             else:
@@ -2009,15 +1884,14 @@ def get_label_conflict_matrix(data, target_column: str="NGS_log_norm") -> pd.Dat
     :param target_column: Column name for the target variable
 
     :return: Dataframe containing label conflict rates between publications
-    '''    
-    # creating publication vs publication matrix with label conflict rates as values
+    '''
     if "label" not in data.columns:
         if target_column not in data.columns:
             calculate_target(data, y_col=target_column, drop_read_count=False)
         data["median_label"] = data.groupby('Publication')[target_column].transform('median')
         data["label"] = data.apply(lambda row: 1 if row[target_column] > row['median_label'] else 0, axis=1)
     strain = data["Strain"].unique()[0]
-    pubs = STRAIN_TO_PUBS[strain]  # data["Publication"].unique()
+    pubs = STRAIN_TO_PUBS[strain]
     matrix = pd.DataFrame(0, index=pubs, columns=pubs)
     for pub1 in pubs:
         ids_pub1 = set(data[data['Publication'] == pub1]['ID'])
@@ -2042,8 +1916,7 @@ def get_odds_ratio_matrix(data_dict, strain):
     '''
     Transforms the dictionary of pairwise odds ratios into a matrix format for easier visualization and analysis.
     '''
-    # keys are tuples of (pub1, pub2), values are odds ratios
-    pubs = STRAIN_TO_PUBS[strain]  # sorted(set(pub for pair in data_dict.keys() for pub in pair))
+    pubs = STRAIN_TO_PUBS[strain]
     matrix = pd.DataFrame(index=pubs, columns=pubs, dtype=float)
 
     for pub1 in pubs:
@@ -2125,7 +1998,6 @@ def plot_label_scatter(data, pub1, pub2, target_column="NGS_log_norm", aggregati
     ax.fill_betweenx([ax.get_ylim()[0], y_median], x_median, ax.get_xlim()[1], color='yellow', alpha=0.3)
     ax.fill_betweenx([y_median, ax.get_ylim()[1]], ax.get_xlim()[0], x_median, color='yellow', alpha=0.3)
 
-    # create custom legend: Patches for areas and lines for thresholds
     legend_elements = [plt.Line2D([0], [0], color='grey', linestyle='--', label='Label Threshold'),
                        Patch(facecolor='blue', edgecolor='blue', alpha=0.3, label='Agreement'),
                        Patch(facecolor='yellow', edgecolor='yellow', alpha=0.3, label='Conflict')]
@@ -2138,10 +2010,8 @@ def plot_label_scatter(data, pub1, pub2, target_column="NGS_log_norm", aggregati
     if "NGS" not in target_column:
         title_norm = f'NGS {title_norm}'
 
-    ax.set_xlabel(f'{title_norm}\n{pub1}')#{target_column.replace("_", " ")}')
-    ax.set_ylabel(f'{pub2}\n{title_norm}')#{target_column.replace("_", " ")}')
-    #title = f'Scatter Plot of {title_norm} for {pub1} vs {pub2}'
-    #ax.set_title(title)
+    ax.set_xlabel(f'{title_norm}\n{pub1}')
+    ax.set_ylabel(f'{pub2}\n{title_norm}')
     if path != "":
         os.makedirs(path, exist_ok=True)
         plt.savefig(os.path.join(path, f'{pub1}_vs_{pub2}_{aggregation}_{target_column}_scatter.png'), dpi=300)
@@ -2151,7 +2021,7 @@ def plot_label_scatter(data, pub1, pub2, target_column="NGS_log_norm", aggregati
 
 def test_conflict_significance(data, pub1, pub2, target_column="NGS_log_norm"):
     '''
-    Performs a statistical test to determine if the label conflict rate between two publications is significant.
+    Performs a mcnemars chi-square test to determine if the discordant labels between two publications display a systemic bias.
     '''
     if "label" not in data.columns:
         if target_column not in data.columns:
@@ -2178,22 +2048,16 @@ def test_conflict_significance(data, pub1, pub2, target_column="NGS_log_norm"):
                           np.sum((labels_pub1 == 1) & (labels_pub2 == 0))],
                           [np.sum((labels_pub1 == 0) & (labels_pub2 == 1)),
                            np.sum((labels_pub1 == 0) & (labels_pub2 == 0))]]
-    #contingency_table = pd.crosstab(labels_pub1, labels_pub2)
     if contingency_table[0][1] + contingency_table[1][0] < 25:
         exact = True
     else:
         exact = False
     exact_stat, exact_pvalue, corrected_stat, corrected_pvalue = None, None, None, None
-    #display(f'b: {contingency_table[0][1]}, c: {contingency_table[1][0]}')
     mcnemar_result = mcnemar(contingency_table, exact=exact, correction=False)
     exact_stat, exact_pvalue = mcnemar_result.statistic, mcnemar_result.pvalue
-    #display(f'McNemar{" exact" if exact else " approximate"} test result: statistic={mcnemar_result.statistic}, p-value={mcnemar_result.pvalue}')
     if not exact:
         mcnemar_result = mcnemar(contingency_table, exact=exact, correction=True)
         corrected_stat, corrected_pvalue = mcnemar_result.statistic, mcnemar_result.pvalue
-    #display(f'Corrected McNemar test result: statistic={mcnemar_result.statistic}, p-value={mcnemar_result.pvalue}')
-    #chi2, chi2_pvalue, dof, expected = stats.chi2_contingency(contingency_table)
-    #display(f"Chi-squared: {chi2}, p-value: {p}")
     return b, c, exact_stat, exact_pvalue, corrected_stat, corrected_pvalue#, chi2, chi2_pvalue
 
 def plot_conflict_matrix(conflict_matrix, stat_df=None, name_prefix="", path="", strain="", cutoff=0, target_column="", get_ax = False):
@@ -2201,27 +2065,6 @@ def plot_conflict_matrix(conflict_matrix, stat_df=None, name_prefix="", path="",
     conflict_matrix.rename(columns=lambda x: get_datasetname(strain, x), index=lambda x: get_datasetname(strain, x), inplace=True)
     annot_mat = conflict_matrix.applymap(lambda x: f"{x*100:.1f}" if x > 0 else "0")
     ax = sns.heatmap(conflict_matrix*100, square=True, annot=annot_mat, fmt="", cmap='magma', vmin=0, vmax=100, cbar_kws={'label': 'Conflict of shared DelVGs [%]', "format": "{x:.0f}"})
-    '''
-    # Draw yellow rectangles for non-significant cells
-    if stat_df is not None:
-        non_significant_conflicts = stat_df[(stat_df["exact_pvalue"]>=0.05) | (stat_df["corrected_pvalue"]>=0.05)]
-        non_significant_matrix = pd.DataFrame(0, index=STRAIN_TO_PUBS[strain], columns=STRAIN_TO_PUBS[strain])
-        for (pub1, pub2) in non_significant_conflicts.index:
-            non_significant_matrix.loc[pub1, pub2] = 1
-            non_significant_matrix.loc[pub2, pub1] = 1
-
-        
-        for i in range(non_significant_matrix.shape[0]):
-            for j in range(non_significant_matrix.shape[1]):
-                if non_significant_matrix.iloc[i, j] == 1:
-                    rect = patches.Rectangle(
-                        (j, i), 1, 1,
-                        fill=False,
-                        edgecolor='yellow',
-                        linewidth=2
-                    )
-                    ax.add_patch(rect)
-    '''
     if get_ax:
         return ax
     if path !="":
@@ -2267,11 +2110,8 @@ def plot_intersection_matrix(intersection_matrix, name_prefix="", path="", strai
     
 def plot_mcnemar_matrix(mcnemar_results_df, odds_ratio_matrix, name_prefix="", path="", strain="", cutoff=0, target_column="", get_ax=False):
     sns.set_theme(style="darkgrid", context="notebook", font_scale=1.1, palette="colorblind")
-    #mcnemar_results_df.rename(index=lambda x: f"{get_datasetname(strain, x[0])} vs {get_datasetname(strain, x[1])}", inplace=True)
     odds_ratio_matrix.rename(columns=lambda x: get_datasetname(strain, x), index=lambda x: get_datasetname(strain, x), inplace=True)
-    odds_ratio_matrix = odds_ratio_matrix.applymap(lambda x: np.log10(x) if x > 0 else np.nan)  # Log-transform odds ratios for better visualization
-    
-    #fig, ax = plt.subplots(figsize=(10, 8))
+    odds_ratio_matrix = odds_ratio_matrix.applymap(lambda x: np.log10(x) if x > 0 else np.nan)  # better visualization
     ax = sns.heatmap(odds_ratio_matrix, square=True, annot=True, fmt=".2f", cmap='vlag', center=0, cbar_kws={'label': r'$\log_{10}$ odds ratio of discordant labels'})
     
     # Draw yellow rectangles for non-significant cells
@@ -2335,9 +2175,8 @@ def intersection_and_conflict_pipeline(strain: str, cutoff: int=15, target_colum
                     plot_label_scatter(df, pub1, pub2, target_column=target_column, aggregation=aggregation, path=path)
                 mcnemar_results[(pub1, pub2)] = (b, c, exact_stat, exact_pvalue, corrected_stat, corrected_pvalue) #, chi2, chi2_pvalue)
                 # Calculate odds ratios for each pair of publications
-                odds_ratios[(pub2, pub1)] = b/c if c != 0 else np.inf  # Handle division by zero
+                odds_ratios[(pub2, pub1)] = b/c if c != 0 else np.inf
         mcnemar_results_df = pd.DataFrame(mcnemar_results, index=["b", "c", "exact_stat", "exact_pvalue", "corrected_stat", "corrected_pvalue"]).T
-        # report non-significant results
         if path != "":
             mcnemar_results_df.to_csv(os.path.join(path, f'{strain}_{aggregation}_cutoff_{cutoff}_{target_column}_mcnemar_results.csv'))
             if mcnemar_results_df[(mcnemar_results_df["exact_pvalue"]>=0.05)| (mcnemar_results_df["corrected_pvalue"]>=0.05)].shape[0] > 0:
@@ -2353,26 +2192,6 @@ def intersection_and_conflict_pipeline(strain: str, cutoff: int=15, target_colum
         conflict_matrix = get_label_conflict_matrix(df, target_column=target_column)
         if not kwargs.get("skip_plots", False) and not kwargs.get("skip_conflict_matrix", False):
             plot_conflict_matrix(conflict_matrix, stat_df=mcnemar_results_df, name_prefix=f'{strain}_{aggregation}_cutoff_{cutoff}_{target_column}', path=path, strain=strain, cutoff=cutoff, target_column=target_column)
-        '''conflict_matrix.rename(columns=lambda x: get_datasetname(strain, x), index=lambda x: get_datasetname(strain, x), inplace=True)
-        annot_mat = conflict_matrix.applymap(lambda x: f"{x*100:.1f}" if x > 0 else "0")
-        ax = sns.heatmap(conflict_matrix*100, square=True, annot=annot_mat, fmt="", cmap='magma', vmin=0, vmax=100, cbar_kws={'label': 'Conflict of shared DelVGs [%]', "format": "{x:.0f}"})
-        # Draw yellow rectangles for non-significant cells
-        for i in range(non_significant_matrix.shape[0]):
-            for j in range(non_significant_matrix.shape[1]):
-                if non_significant_matrix.iloc[i, j] == 1:
-                    rect = patches.Rectangle(
-                        (j, i), 1, 1,
-                        fill=False,
-                        edgecolor='yellow',
-                        linewidth=2
-                    )
-                    ax.add_patch(rect)
-
-        if path !="":
-            plt.savefig(os.path.join(path, f'{strain}_{aggregation}_cutoff_{cutoff}_{target_column}_conflict_matrix.png'), dpi=300)
-        elif not kwargs.get("skip_plots", False):
-            plt.show()
-        plt.close()'''
         
         if not kwargs.get("skip_plots", False) and not kwargs.get("skip_weighted_conflict_matrix", False):
             plot_weighted_conflict_matrix(intersection_matrix, conflict_matrix, name_prefix=f'{strain}_{aggregation}_cutoff_{cutoff}_{target_column}', path=path, strain=strain, cutoff=cutoff, target_column=target_column)
@@ -2395,6 +2214,9 @@ def label_conflicts_per_strain(cutoff_grid=[0, 5, 10, 15], target_columns: str|l
                     return
 
 def execute_label_conflicts_per_strain(save_plots=True, debug=False, **kwargs):
+    '''
+    Wraps label_conflicts_per_strain function to use standard parameters
+    '''
     label_conflicts_per_strain(save_plots=save_plots, debug=debug, **kwargs)
 
 

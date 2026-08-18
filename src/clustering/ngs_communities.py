@@ -145,12 +145,7 @@ def detect_elbow_if_applicable(edge_count_df: pd.DataFrame, min_knee_strength: f
     return int(x[max_idx])
 
 
-def plot_edge_count_curve(
-    edge_count_df: pd.DataFrame,
-    elbow_threshold: int | None,
-    output_path: Path,
-    strain: str,
-) -> None:
+def plot_edge_count_curve(edge_count_df: pd.DataFrame, elbow_threshold: int | None, output_path: Path, strain: str, ) -> None:
     fig, ax = plt.subplots(figsize=(10, 6))
     if edge_count_df.empty:
         ax.text(0.5, 0.5, "No candidate pairs available", ha="center", va="center")
@@ -212,12 +207,6 @@ def build_weighted_edges(matrix: pd.DataFrame, shared_counts: pd.DataFrame, min_
     if edges.empty:
         return pd.DataFrame(columns=["source", "target", "shared_samples", "corr_signed", "weight"])
     return edges.sort_values(["weight", "shared_samples"], ascending=[False, False]).reset_index(drop=True)
-
-
-def compute_publication_sample_counts(df: pd.DataFrame) -> dict[str, int]:
-    '''Compute number of unique samples (ACC_num) per publication.'''
-    return df.groupby("Publication")["ACC_num"].nunique().to_dict()
-
 
 def compute_node_weights_publication_normalized(df: pd.DataFrame, publication_sample_counts: dict[str, int]) -> dict[str, float]:
     '''
@@ -839,9 +828,6 @@ def run_pipeline_variant(args: argparse.Namespace, abs_weights: bool, leiden_par
     )
 
     if args.min_publications > 1:
-        #id_pub_counts = df.groupby("ID")["Publication"].nunique()
-        #keep_ids = set(id_pub_counts[id_pub_counts >= args.min_publications].index)
-        #df = df[df["ID"].isin(keep_ids)].copy()
         logging.info(
             "Filtered IDs by min_publications=%d, remaining IDs=%d",
             args.min_publications,
@@ -890,7 +876,7 @@ def run_pipeline_variant(args: argparse.Namespace, abs_weights: bool, leiden_par
     logging.info("Constructed graph edges with %d edges and %d unique connected IDs", len(edges_df), len(connected_ids))
     
     # Compute publication-normalized node weights
-    pub_sample_counts = compute_publication_sample_counts(df)
+    pub_sample_counts = df.groupby("Publication")["ACC_num"].nunique().to_dict()
     node_weights = compute_node_weights_publication_normalized(df, pub_sample_counts)
     
     nodes_df = build_nodes(df, keep_ids=connected_ids, node_weights=node_weights)
@@ -1015,10 +1001,8 @@ def run_pipeline(args: argparse.Namespace) -> dict:
     return primary_result
 
 
-def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(
-        description="Build a candidate-ID graph from NGS read-count correlations and run community detection."
-    )
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="Build a correlation network from NGS read-counts and run community detection.")
     parser.add_argument("--strain", required=True, choices=ALL_STRAINS)
     parser.add_argument("--publications", nargs="+", default=None, help="Optional publication filter.")
     parser.add_argument("--sample-col", default="ACC_num", help="Sample column used to define shared samples.")
@@ -1029,12 +1013,7 @@ def parse_args() -> argparse.Namespace:
 
     parser.add_argument("--min-shared-samples", type=int, default=3, help="Minimum shared ACC_num samples for an ID-ID edge.")
     parser.add_argument("--force-min-shared-samples", action="store_true", help="Force minimum shared ACC_num samples for an ID-ID edge. Otherwise uses elbow detection on edge count curve to suggest a threshold.")
-    parser.add_argument(
-        "--min-publications",
-        type=int,
-        default=2,
-        help="Minimum number of unique publications an ID must occur in to be considered.",
-    )
+    parser.add_argument("--min-publications", type=int, default=2, help="Minimum number of unique publications an ID must occur in to be considered.")
     parser.add_argument("--sweep-start", type=int, default=2, help="Start threshold for edge-count sweep plot.")
     parser.add_argument("--corr-method", choices=["pearson", "spearman", "kendall"], default="kendall")
     parser.add_argument("--abs-weights", action="store_true", default=True, help="Use absolute correlation for edge weights.")
@@ -1056,10 +1035,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--community-plot-max-nodes", type=int, default=200, help="Maximum number of graph nodes allowed before skipping the full community plot.")
     parser.add_argument("--force-community-plot", action="store_true", help="Force the full community plot even when the graph exceeds --community-plot-max-nodes.")
     parser.add_argument("--verbose", action="store_true")
-    return parser.parse_args()
 
-if __name__ == "__main__":
-    args = parse_args()
+    args = parser.parse_args()
     setup_logging(verbose=args.verbose)
     try:
         run_pipeline(args)

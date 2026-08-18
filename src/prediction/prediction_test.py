@@ -27,7 +27,6 @@ from sklearn.preprocessing import StandardScaler
 import joblib
 import json
 
-# Ensure imports work regardless of current working directory.
 BASE_DIR = Path(__file__).resolve().parent
 SRC_DIR = BASE_DIR.parent
 REPO_ROOT = BASE_DIR.parents[1]
@@ -38,38 +37,61 @@ if str(SRC_DIR) not in sys.path:
 sys.path.insert(0, os.path.join(".."))
 sys.path.insert(0, os.path.join(os.getcwd(), ".."))
 
-from clf_utils import *
+from prediction.pred_utils import *
 try:
-    from utils import calculate_features, load_data, calculate_target, make_multiclass, apply_cutoff, cutoff_clean, drop_non_numeric, split_data, stratified_undersample, identify_candidates, transform_meta_features, UNPOOLED_DATA_DIR
-    from utils import calculate_target, cutoff_clean, drop_non_numeric, get_sequence_quicker, make_multiclass
+    from utils import (
+        UNPOOLED_DATA_DIR,
+        STRAIN_WISE_PUBLICATIONS,
+        calculate_target,
+        cutoff_clean,
+        drop_non_numeric,
+        get_sequence_quicker,
+        make_multiclass
+    )
 except ImportError:
     import glob
+
     logging.error("Failed to import from utils.py. Please ensure that utils.py is in the same directory as model_check.py or in the Python path.")
     paths_to_check = [str(BASE_DIR), str(SRC_DIR), os.path.join(os.getcwd(), "..")]
     logging.error(f"Checked the following paths for utils.py:\n{paths_to_check}")
     py_files = glob.glob(os.path.join(BASE_DIR, "*.py")) + glob.glob(os.path.join(SRC_DIR, "*.py")) + glob.glob(os.path.join(os.getcwd(), "..", "*.py"))
     logging.error(f"Python files found in those directories:\n{py_files}")
     logging.error("Current working directory: " + os.getcwd())
-    logging.error(f'Python paths: {sys.path}')
-    exit(1)
-RESULT_PATH = str(REPO_ROOT / 'results' / "mcf")  # "model_check")
-#RESULT_PATH = os.path.abspath(os.path.join(os.getcwd(), '..', '..', 'dev_results', "fix_unpooled"))
-from main import test_classifiers, test_on_artificial
+    logging.error(f"Python paths: {sys.path}")
+    raise exit(1)
 
-ALL_PUBS = ["Lui2019", "Kupke2020", "Penn2022", "Sheng2018", "Zhuravlev2020", "vdHoecke2015", "Boussier2020", "Southgate2019", "Valesano2020", "Mendes2021", "Alnaji2019", "Berry2021", "Alnaji2021", "Wang2020", "Wang2023", "Pelz2021"]
-ALL_STRAINS = ["A_Anhui_1_2013", "A_California_07_2009", "A_Connecticut_Flu122_2013", "A_NewCaledonia_20-JY2_1999", "A_Perth_16_2009", "A_PuertoRico_8_1934", "A_turkey_Turkey_1_2005", "A_WSN_33", "B_Brisbane_60_2008", "B_Lee_1940", "B_Victoria_504_2000", "B_Yamagata_16_1988"]
+def setup_logging(verbose=False):
+    '''
+    Creates a consistent logger
 
-strain_to_pubs = {'A_PuertoRico_8_1934': ['Kupke2020', 'Zhuravlev2020', 'VdHoecke2015', 'Alnaji2021', 'Wang2020', 'Wang2023', 'Pelz2021'],
-                  'A_WSN_33': ['Boussier2020', 'Mendes2021'],
-                  'B_Victoria_504_2000': ['Valesano2020', 'Berry2021'],
-                  'B_Yamagata_16_1988': ['Southgate2019', 'Valesano2020', 'Berry2021']}
-STRAIN_TO_PUBS = strain_to_pubs
-STRAIN = 'A_PuertoRico_8_1934'
-PUBS_TO_USE = ['Alnaji2021', 'Kupke2020', 'Pelz2021', 'vdHoecke2015', 'Wang2020', 'Wang2023', 'Zhuravlev2020']
-STANDARD_FEATURES_DEFAULT = ['Segment', 'Start', 'End', 'Direct_repeat', 'Junction', 'remaining_length', 'deletion_length', '3_5_diff', '3_len', "5_len", 'length_proportion', 'Peptide_Length']
+    :param verbose: If True, sets the logging level to DEBUG; otherwise, INFO.
+    :return: Configured logger instance.
+    '''
+    fmt_debug = '%(asctime)s - %(name)s - %(levelname)s - %(filename)s:%(lineno)s - %(message)s'
+    fmt_info  = '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+    
+    logging.basicConfig(handlers=[logging.StreamHandler()],
+                        format=fmt_debug if verbose else fmt_info,
+                        force=True)
+    logging.getLogger('shap').setLevel(logging.WARNING)
+    warnings.filterwarnings("ignore", category=UserWarning, module="matplotlib\..*")
+    logger = logging.getLogger("PredictionModels")
+    logger.setLevel(logging.DEBUG if verbose else logging.INFO)
+    return logger
+
+RESULT_PATH = os.path.abspath(os.path.join(REPO_ROOT, 'results', "prediction"))
+
+STANDARD_FEATURES_DEFAULT = ['Segment', 'Start', 'End', 'Direct_repeat', 'Junction', 'remaining_length', 'deletion_length', '3_5_diff', '3_len', "5_len", 'length_proportion']
 
 
 def load_preprocessed_data(strain, logger=logging):
+    '''
+    Loads preprocessed data and the corresponding column dictionary for the specified strain from the UNPOOLED_DATA_DIR. Returns a tuple of (dataframe, column_dictionary). If either the preprocessed data or the column dictionary is not found, logs a warning and returns (None, None).
+
+    :param strain: The strain identifier for which to load the preprocessed data.
+    :param logger: Logger instance for logging messages.
+    :return: Tuple containing the dataframe and column dictionary, or (None, None) if not found.
+    '''
     data_path = os.path.join(UNPOOLED_DATA_DIR, strain, "preprocessed_data.csv")
     col_dict_path = os.path.join(UNPOOLED_DATA_DIR, strain, "processed_column_dict.json")
     
@@ -87,21 +109,29 @@ def load_preprocessed_data(strain, logger=logging):
 def compute_shap_values(model, X_train, X_test, model_name, result_path, is_regression=False, bin_name="", logger=logging):
     '''
     Computes SHAP values for the given model (regressor or classifier) and saves the explainer, raw SHAP values, and summary plots to the specified result path. Automatically selects the appropriate SHAP explainer based on the model type and name, and handles both regression and classification scenarios.
+
+    :param model: Trained model (regressor or classifier) for which to compute SHAP values.
+    :param X_train: Training data used to fit the model.
+    :param X_test: Test data for which to compute SHAP values.
+    :param model_name: Name of the model for which to compute SHAP values (e.g., "RandomForest", "gradient_boost").
+    :param result_path: Path to the directory where SHAP values and explainer will be saved.
+    :param is_regression: Boolean indicating whether the model is a regressor.
+    :param bin_name: Suffix to append to model_name (for specifying classification bins, e.g., "_2bins" or "_3bins").
+    :param logger: Logger instance for logging messages.
     '''
     try:
         # Choose the right estimator (GridSearchCV vs direct model)
         estimator = model.best_estimator_ if hasattr(model, "best_estimator_") else model
 
-        # Pick explainer
-        if model_name.lower() in ["gradient_boost","adaboost","random_forest","xgb","lgb"]: #"xgb" in model_name.lower() or "lgb" in model_name.lower() or "forest" in model_name.lower():
+        # Pick explainer based on model
+        if model_name.lower() in ["gradient_boost","adaboost","random_forest","xgb","lgb"]:
             explainer = shap.TreeExplainer(estimator)
             shap_values = explainer.shap_values(X_test)
-        elif model_name.lower() in ["linear","ridge","lasso","logistic_regression"]: #"linear" in model_name.lower() or "lasso" in model_name.lower() or "ridge" in model_name.lower() or "logistic_regression" in model_name.lower():
+        elif model_name.lower() in ["linear","ridge","lasso","logistic_regression"]:
             explainer = shap.LinearExplainer(estimator, X_train)
             shap_values = explainer.shap_values(X_test)
         else:
-            logger.info(f'SHAP values for model {model_name} may take more time.')
-            # KernelExplainer (slower, but general)
+            logger.debug(f'SHAP values for model {model_name} may take more time.')
             background = shap.sample(X_train, 100, random_state=0)
             predict_fn = estimator.predict if is_regression else estimator.predict_proba
             explainer = shap.KernelExplainer(predict_fn, background)
@@ -110,7 +140,6 @@ def compute_shap_values(model, X_train, X_test, model_name, result_path, is_regr
         os.makedirs(result_path, exist_ok=True)
         try:
             # save shap explainer to file for later use
-            #explainer.save(os.path.join(result_path, f"{model_name}{bin_name}_shap_explainer.pkl"))
             joblib.dump(explainer, os.path.join(result_path, f"{model_name}{bin_name}_shap_explainer.pkl"))
         except Exception as e:
             logger.error(f"Error saving SHAP explainer for {model_name}: {e}")
@@ -135,7 +164,8 @@ def compute_shap_values(model, X_train, X_test, model_name, result_path, is_regr
                 for class_idx in range(shap_arr.shape[0]):
                     pd.DataFrame(shap_arr[class_idx], columns=X_test.columns, index=X_test.index).to_csv(
                         os.path.join(result_path, f"{model_name}{bin_name}_shap_values_class{class_idx}.csv"), index=True
-                    )
+                    )            
+                plot_multiclass_shap_summary(shap_arr, X_test, result_path=result_path, name_prefix=f'{model_name}{bin_name}')
         except Exception as e:
             logger.error(f"Error saving SHAP values as CSV for {model_name}: {e}")
 
@@ -163,6 +193,13 @@ def compute_shap_values(model, X_train, X_test, model_name, result_path, is_regr
 
 
 def save_model(model, name, path):
+    '''
+    Helper function to save a trained model using joblib. Model will be saved in the given directory as {name}.pkl
+    
+    :param model: Trained model to save.
+    :param name: Name to use for the saved model file (without extension).
+    :param path: Directory path where the model should be saved.
+    '''
     os.makedirs(path, exist_ok=True)
     joblib.dump(model, os.path.join(path,f'{name}.pkl'))
 
@@ -171,7 +208,11 @@ def apply_pooling(dataframe, method, inplace=False, logger=logging):
     '''
     Pools NGS read counts of each ID per publication using the specified method (sum or mean).
 
-    method options: "sum", "mean"
+    :param dataframe: Input dataframe containing NGS read counts.
+    :param method: Pooling method to use ("sum" or "mean").
+    :param inplace: If True, modifies the dataframe in place; otherwise, returns a new dataframe.
+    :param logger: Logger instance for logging messages.
+    :return: None if inplace is True; otherwise, returns the pooled dataframe.
     '''
     df = dataframe if inplace else dataframe.copy()
 
@@ -192,10 +233,19 @@ def apply_pooling(dataframe, method, inplace=False, logger=logging):
 
 
 def normalize_by_length(dataframe, feature_columns, inplace=False, logger=logging):
+    '''
+    Normalizes sequence length-dependent features by the length of the sequence. Requires that either the "Full_Sequence" column is present in the dataframe or that the dataframe can be processed to generate it.
+
+    :param dataframe: Input dataframe containing sequence features.
+    :param feature_columns: List of feature columns to normalize.
+    :param inplace: If True, modifies the dataframe in place; otherwise, returns a new dataframe.
+    :param logger: Logger instance for logging messages.
+    :return: None if inplace is True; otherwise, returns the dataframe with normalized features.
+    '''
     df = dataframe if inplace else dataframe.copy()
     if not "Full_Sequence" in df.columns:
         df = get_sequence_quicker(df)
-    seq_len_dependent_features = ['Start', 'End', 'remaining_length', 'deletion_length', '3_5_diff', "3_len", "5_len"] # these features are likely to be dependent on the length of the peptide, so we can normalize them by the peptide length
+    seq_len_dependent_features = ['Start', 'End', 'remaining_length', 'deletion_length', '3_5_diff', "3_len", "5_len"]
     df = get_sequence_quicker(df)
     df["seq_len"] = df["Full_Sequence"].transform(len)
     for col in [c for c in feature_columns if c in seq_len_dependent_features]:
@@ -206,6 +256,15 @@ def normalize_by_length(dataframe, feature_columns, inplace=False, logger=loggin
 
 
 def scale_features(dataframe, feature_columns, inplace=False, logger=logging):
+    '''
+    Scales the specified feature columns in the dataframe using StandardScaler.
+
+    :param dataframe: Input dataframe containing the features to scale.
+    :param feature_columns: List of feature columns to scale.
+    :param inplace: If True, modifies the dataframe in place; otherwise, returns a new dataframe.
+    :param logger: Logger instance for logging messages.
+    :return: None if inplace is True; otherwise, returns the dataframe with scaled features.
+    '''
     df = dataframe if inplace else dataframe.copy()
     features_to_scale = []
     for col in feature_columns:
@@ -227,6 +286,20 @@ def scale_features(dataframe, feature_columns, inplace=False, logger=logging):
 
 def train_regressor(X_train, y_train, X_test, y_test, perform_grid_search: bool=True,
                     seed: int = 42, result_path=None, reg_name="random_forest", logger=logging):
+    '''
+    Trains a regressor on the provided training data and evaluates it on the test data.
+
+    :param X_train: Training input.
+    :param y_train: Training target output.
+    :param X_test: Test input.
+    :param y_test: Test target output.
+    :param perform_grid_search: If True, performs grid search to find the best hyperparameters.
+    :param seed: Random seed for reproducibility.
+    :param result_path: Path to save the results.
+    :param reg_name: Name of the regressor to train.
+    :param logger: Logger instance for logging messages.
+    :return: Tuple containing the best trained model and a dictionary of evaluation results.
+    '''
     os.makedirs(result_path, exist_ok=True)
     results = dict()
     results["metric"] = ["MSE", "MAE", "R2"]
@@ -247,7 +320,6 @@ def train_regressor(X_train, y_train, X_test, y_test, perform_grid_search: bool=
                         refit=True, cv=kf, return_train_score=True)
     grid.fit(X_train, y_train)
 
-    # Save grid search results for this regressor
     cv_results_dict = {}
     for k, v in grid.cv_results_.items():
         try:
@@ -273,12 +345,10 @@ def train_regressor(X_train, y_train, X_test, y_test, perform_grid_search: bool=
 
     results[reg_name]= [mse, mae, r2]
 
-    # Plot actual vs predicted
     try:
         plot_actual_vs_pred(y_test, y_pred, reg_name, os.path.join(result_path))
     except Exception as e:
         logger.error(f'Error plotting regression predictions:\n{e}')
-    # Save all grid search results to a JSON file
     try:
         json_path = os.path.join(result_path, 'grid_search_results_regressors.json')
         with open(json_path, 'w') as f:
@@ -299,6 +369,22 @@ def train_regressor(X_train, y_train, X_test, y_test, perform_grid_search: bool=
 
 def train_classifier(X_train, y_train, X_test, y_test, perform_grid_search: bool, n_bins: int = 2,
                      seed: int = 42, result_path=None, clf_name="random_forest", logger=logging):
+    '''
+    Trains a classifier on the provided training data and evaluates it on the test data.
+
+    :param X_train: Training input.
+    :param y_train: Training target output.
+    :param X_test: Test input.
+    :param y_test: Test target output.
+    :param perform_grid_search: If True, performs grid search to find the best hyperparameters.
+    :param n_bins: Number of bins for classification (2 for binary, >2 for multiclass).
+    :param seed: Random seed for reproducibility.
+    :param result_path: Path to save the results.
+    :param clf_name: Name of the classifier to train.
+    :param logger: Logger instance for logging messages.
+
+    :return: Tuple containing the best trained model and a dictionary of evaluation results.
+    '''
     os.makedirs(result_path, exist_ok=True)
     data_dict = dict()
     data_dict["param"] = ["accuracy"]
@@ -424,18 +510,6 @@ def train_classifier(X_train, y_train, X_test, y_test, perform_grid_search: bool
         logger.info(f"Saved grid search results for all classifiers to {json_path}")
     except Exception as e:
         logger.error(f"Failed to save grid search results: {e}")
-    '''try:
-        final_df = pd.DataFrame(data_dict)
-        final_df = final_df.drop(['param'], axis=1)
-        final_df["mean"] = final_df.mean(axis=1)
-        f1_df = pd.DataFrame(f1_dict)
-        f1_df = f1_df.drop(['param'], axis=1)
-        f1_df["mean"] = f1_df.mean(axis=1)
-        logging.info(f'Accuracies across classifiers:\n{final_df}\n{f1_df}')
-        final_df.to_csv(os.path.join(result_path, f'results_{n_bins}.csv'), index=False)
-        f1_df.to_csv(os.path.join(result_path,f'f1_scores_{n_bins}.csv'), index=False)
-    except Exception as e:
-        logging.error(f'Issue compiling results old way:\n{e}\n{traceback.format_exc()}')'''
 
     results_df = pd.DataFrame(results)
     results_df.to_csv(os.path.join(result_path, f'classifier_{n_bins}_results.csv'), index=False)
@@ -448,6 +522,17 @@ def train_classifier(X_train, y_train, X_test, y_test, perform_grid_search: bool
 
 
 def test_regressor(model, X_test, y_test, name, result_path, logger=logging):
+    '''
+    Tests a trained regressor on the provided test data and logs the evaluation metrics (MSE, MAE, R^2).
+
+    :param model: Trained regressor to test.
+    :param X_test: Test input data.
+    :param y_test: True target values for the test data.
+    :param name: Name of the regressor (used for logging and saving plots).
+    :param result_path: Path to save the results and plots.
+    :param logger: Logger instance for logging messages.
+    :return: Tuple containing the evaluation metrics (MSE, MAE, R^2).
+    '''
     y_pred = model.predict(X_test)
     try:
         plot_actual_vs_pred(y_true=y_test, y_pred=y_pred, model_name=name, output_dir=result_path)
@@ -462,6 +547,19 @@ def test_regressor(model, X_test, y_test, name, result_path, logger=logging):
 
 
 def test_classifier(model, X_test, y_test, name, result_path, n_bins=2, labels=None, logger=logging):
+    '''
+    Tests a trained classifier on the provided test data and logs the evaluation metrics (accuracy, F1-score, Matthews correlation coefficient).
+
+    :param model: Trained classifier to test.
+    :param X_test: Test input data.
+    :param y_test: True target values for the test data.
+    :param name: Name of the classifier (used for logging and saving plots).
+    :param result_path: Path to save the results and plots.
+    :param n_bins: Number of bins for evaluation (default is 2). Must be the same as used during training.
+    :param labels: List of labels for the confusion matrix.
+    :param logger: Logger instance for logging messages.
+    :return: Tuple containing the evaluation metrics (accuracy, F1-score, Matthews correlation coefficient).
+    '''
     predicted = model.predict(X_test)
     if {"Start", "End"}.issubset(set(X_test.columns)):
         try:
@@ -489,6 +587,12 @@ def test_classifier(model, X_test, y_test, name, result_path, n_bins=2, labels=N
 def drop_non_finite(dataframe, inplace=False, logger=logging):
     '''
     Drops all numeric columns that hold non-finite values (NaN, inf, -inf) from the dataframe.
+    Logs which columns were dropped. If all columns are dropped, raises an error to prevent training on an empty dataset.
+
+    :param dataframe: Input dataframe to process.
+    :param inplace: If True, modifies the dataframe in place; otherwise, returns a new dataframe.
+    :param logger: Logger instance for logging messages.
+    :return: None if inplace is True; otherwise, returns the dataframe with non-finite columns dropped.
     '''
 
     df = dataframe if inplace else dataframe.copy()
@@ -505,6 +609,11 @@ def drop_non_finite(dataframe, inplace=False, logger=logging):
 def drop_nan_columns(dataframe, inplace=False, logger=logging):
     '''
     Drops all columns that contain any NaN values from the dataframe, and logs which columns were dropped. If all columns are dropped, raises an error to prevent training on an empty dataset.
+
+    :param dataframe: Input dataframe to process.
+    :param inplace: If True, modifies the dataframe in place; otherwise, returns a new dataframe.
+    :param logger: Logger instance for logging messages.
+    :return: None if inplace is True; otherwise, returns the dataframe with NaN columns dropped.
     '''
     df = dataframe if inplace else dataframe.copy()
     nan_columns = df.columns[df.isna().any()].tolist()
@@ -518,6 +627,14 @@ def drop_nan_columns(dataframe, inplace=False, logger=logging):
 def undersample_by_quantile(dataframe, target_column, n_bins=3, quantiles=None, random_state=42, logger=logging):
     '''
     Performs stratified undersampling of the dataframe based on quantiles of the target column. The target column is binned into n_bins using the specified quantiles, and then undersampling is performed to balance the number of samples in each bin. If quantiles are not provided, they are calculated automatically. Returns a new dataframe that has been undersampled according to the specified quantile bins.
+
+    :param dataframe: Input dataframe to undersample.
+    :param target_column: Name of the target column to use for quantile binning.
+    :param n_bins: Number of quantile bins to create (default is 3).
+    :param quantiles: Optional list of quantiles to use for binning. If None, quantiles are calculated automatically.
+    :param random_state: Random seed for reproducibility of undersampling.
+    :param logger: Logger instance for logging messages.
+    :return: New dataframe that has been undersampled based on quantile bins of the target column.
     '''
     df = dataframe.copy()
     if quantiles is None:
@@ -535,7 +652,6 @@ def undersample_by_quantile(dataframe, target_column, n_bins=3, quantiles=None, 
         undersampled_bin_indices = np.random.choice(bin_indices, size=min(len(bin_indices), len(df) // n_bins), replace=False)
         undersampled_indices.extend(undersampled_bin_indices)
     undersampled_df = df.loc[undersampled_indices].copy()
-    #undersampled_df = stratified_undersample(df, "quantile_bin", random_state=random_state)
     undersampled_df = undersampled_df.drop(columns=["quantile_bin"], errors="ignore")
     logger.info(f"Performed undersampling based on quantiles of {target_column}. Original size: {len(dataframe)}, undersampled size: {len(undersampled_df)}.")
     return undersampled_df
@@ -554,21 +670,25 @@ def prepare_data(df,
                  drop_intersecting=False,
                  logger=logging,
                  **kwargs):
-    '''# Load preprocessed data
-    df, col_dict = load_preprocessed_data(strain)
-    if df is None or col_dict is None:
-        logger.error(f"Preprocessed data not found for strain {strain}. Cannot train model.")
-        return
-    if pub_id not in df["pub_id"].unique():
-        logger.error(f"Publication ID {pub_id} not found in data for strain {strain}. Available pub_ids: {df['pub_id'].unique()}. Cannot train model.")
-        return
+    '''
+    Prepares the input dataframe for model training and testing. This includes applying pooling, selecting feature columns, normalizing and scaling features, and splitting the data into training and testing sets based on the specified test type.
 
-    # Define the results directory
-    results_dir = os.path.join(RESULT_PATH, test_type, strain, package, f"{pooling if pooling is not None else 'unpooled'}_{'drop' if drop_intersecting else 'keep'}_{cutoff}_{df[df['pub_id']==pub_id]['Publication'].iloc[0]}")
-    os.makedirs(results_dir, exist_ok=True)
-    logger.addHandler(logging.FileHandler(os.path.join(results_dir, "results.log")))
-    logger.info(f"Starting for strain {strain}, publication ID {pub_id}={df[df['pub_id']==pub_id]['Publication'].iloc[0]}, cutoff {cutoff}, package {package}, pooling {pooling}, drop_intersecting {drop_intersecting}.")'''
-
+    :param df: Input dataframe containing the data.
+    :param col_dict: Dictionary containing column categories (e.g., standard, meta, clustering, context).
+    :param test_type: Type of test to perform ("single_dataset", "leave_one_out", or "intersection").
+    :param model_type: Type of model to train ("reg" for regression, "clf" for classification).
+    :param model_name: Name of the model to train (e.g., "random_forest", "xgb").
+    :param strain: Strain identifier for the data.
+    :param cutoff: Cutoff value for filtering the data.
+    :param pub_id: Publication ID to specify which dataset to use (single_dataset) or exclude (leave_one_out) for training data.
+    :param package: Feature package to use ("benchmark", "relational", or "context").
+    :param y_column: Name of the target column for model training.
+    :param pooling: Pooling method to apply to the data ("sum" or "mean") or None for no pooling.
+    :param drop_intersecting: If True, drops rows where the "Intersecting" column is True.
+    :param logger: Logger instance for logging messages.
+    :param kwargs: Additional keyword arguments to hand over to subsequent functions.
+    :return: Tuple containing the prepared training dataframe (base_df), testing dataframe (cross_df), and the list of feature columns to use for model training.
+    '''
     # apply per-publication pooling if specified
     if pooling is not None:
         logger.debug(f'before pooling: {df.shape}\n{df}')
@@ -637,7 +757,7 @@ def prepare_data(df,
     feature_columns = [col for col in feature_columns if col not in constant_cols]
 
 
-    if base_df.empty or len(base_df) < 10: # if there are less than 10 samples left after cutoff, it's unlikely we can train a meaningful model
+    if base_df.empty or len(base_df) < 50: # if there are fewer than 50 samples, skip training and log a warning
         raise ValueError(f"Not enough training data left after applying cutoff for strain {strain}, pub_id {pub_id}, cutoff {cutoff}. Cannot train model.")
     
     cross_df = cutoff_clean(cross_df, cutoff)
@@ -653,29 +773,25 @@ def prepare_data(df,
     if model_type == "reg":
         if test_type == "intersection":
             y_column = "Num_Publications"
-            y_base = base_df[y_column]/base_df[y_column].max() # min-max normalization to keep target values between 0 and 1, which can help with training stability for regression models
+            y_base = base_df[y_column]/base_df[y_column].max()
         else:
-            # apply undersampling by quantiles to regression target to ensure that training and testing sets have similar distributions of the target variable, which can help with model generalization, especially when the target variable has a skewed distribution
             undersampled_base_df = undersample_by_quantile(base_df, target_column=y_column, n_bins=10, logger=logger)
             y_base = undersampled_base_df[y_column]
             X_base = undersampled_base_df[feature_columns]
     elif model_type == "clf":
         if test_type == "intersection":
             y_column = "Num_Publications"
-            # threshold is half the number of unique publications (rounded up), but at least 2
-            threshold = max(2, int(np.ceil(len(STRAIN_TO_PUBS[strain])/2)))
-            # classification with one class per publication count, with any count above the threshold considered as single category
+            threshold = max(2, int(np.ceil(len(STRAIN_WISE_PUBLICATIONS[strain])/2)))
             y_base = base_df[y_column].apply(lambda x: x if x < threshold else threshold).astype(int)
             logger.info(f'For classification in intersection test, using publication count threshold of {threshold}. Classes will be: {y_base.unique()} with {y_base.max()} as the maximum class representing intersecting DelVGs.')
 
-            # if classes are imbalanced, undersample the majority class to have at most 4 times more samples than the minority class
+            # if classes are imbalanced, undersample the majority class to have at most 4 times as many samples as the minority class
             if y_base.value_counts().max() > 4*y_base.value_counts().min():
                 majority_count = y_base.value_counts().max()
                 minority_count = y_base.value_counts().min()
                 undersample_count = min(majority_count, 4*minority_count)
-                # ensure that each class is at most 4 times more prevalent than the minority class
                 undersampled_indices = []
-                for cls in y_base.unique(): # ensuring that each class is represented in the undersampled dataset, but if a class has more than 4 times the samples of the minority class, we only take a random subset of it
+                for cls in y_base.unique():
                     cls_count = y_base.value_counts()[cls]
                     if cls_count > 4*minority_count:
                         undersample_count = min(undersample_count, 4*minority_count)
@@ -689,44 +805,54 @@ def prepare_data(df,
         logger.error(f"Invalid model type specified: {model_type}. Must be one of 'reg' or 'clf'.")
         return
     
-    X_train, X_test, y_train, y_test = train_test_split(X_base, y_base, test_size=0.2, random_state=42)
+    X_train, X_test, y_train, y_test = train_test_split(X_base, y_base, test_size=0.2, random_state=kwargs.get("seed", 42))
 
     # ensure that X contains only numeric values for model training
     X_train = drop_non_numeric(X_train)
     X_test = drop_non_numeric(X_test)
-
-    '''try:
-        # ensure that X contains only finite values for model training
-        X_train = drop_non_finite(X_train, logger=logger)
-        X_test = drop_non_finite(X_test, logger=logger)
-    except Exception as e:
-        logger.error(f'Error during dropping non-finite values:\n{e}\n{traceback.format_exc()}')
-        return'''
 
     return X_train, X_test, y_train, y_test, cross_df, feature_columns
 
 def calculate_deltas(training_results, testing_results, logger=logging):
     '''
     Calculate the difference between training and testing accuracies.
-    The dictionaries for classifiers are formatted as {"metric": ["accuracy", "F1-Score", "MCC"], "classifier1": [train_acc, train_f1, train_mcc], "classifier2": [train_acc, train_f1, train_mcc], ...}
-    The dictionaries for regressors are formatted as {"metric": ["MSE", "MAE", "R2"], "regressor1": [train_mse, train_mae, train_r2], "regressor2": [train_mse, train_mae, train_r2], ...}
+    
+    :param training_results: Dictionary containing the metrics and training results for the model.
+    :param testing_results: Dictionary containing the metrics and testing results for the model on each dataset.
+    :param logger: Logger instance for logging messages.
+    :return: Dictionary containing the deltas for each model.
     '''
     deltas = {}
     for model in training_results:
         if model == "metric":
             continue
-        if model not in testing_results:
-            logger.warning(f'Model {model} found in training results but not in testing results. Skipping delta calculation for this model.')
-            continue
-        deltas[model] = []
-        for train_metric, test_metric in zip(training_results[model], testing_results[model]):
-            if train_metric is None or test_metric is None:
-                deltas[model].append(None)
-            else:
-                deltas[model].append(test_metric - train_metric)
+        for dataset in testing_results:
+            if dataset == "metric":
+                    continue
+            for metric in training_results["metric"]:
+                if metric not in testing_results["metric"]:
+                    logger.warning(f'Metric {metric} found in training results but not in testing results. Skipping delta calculation for this metric.')
+                    continue
+                if dataset not in deltas:
+                    deltas[dataset] = {}
+                if metric not in deltas[dataset]:
+                    deltas[dataset][metric] = {}
+                if dataset not in deltas[dataset][metric]:
+                    deltas[dataset][metric][dataset] = None
+                train_value = training_results[model][training_results["metric"].index(metric)]
+                test_value = testing_results[dataset][testing_results["metric"].index(metric)]
+                if train_value is None or test_value is None:
+                    deltas[dataset][metric][dataset] = None
+                else:
+                    deltas[dataset][metric][dataset] = train_value - test_value
     return deltas
 
 def nan_compatible(model_name):
+    '''
+    Check if the specified model is compatible with NaN values in the input data.
+    :param model_name: Name of the model to check.
+    :return: True if the model is compatible with NaN values, False otherwise.
+    '''
     is_nan_compatible = {"random_forest": True, 
                          "xgb": True,
                          "lgb": True,
@@ -750,6 +876,23 @@ def train_and_evaluate_model(test_type="single_dataset",
                              drop_intersecting=False,
                              logger=logging,
                              **kwargs):
+    '''
+    Main pipeline function to train and evaluate a model based on the specified parameters. It handles data loading, preprocessing, model training, evaluation, and logging of results.
+
+    :param test_type: Type of test to perform ('single_dataset', 'leave_one_out', or 'intersection').
+    :param model_type: Type of model to train ('reg' for regression, 'clf' for classification).
+    :param model_name: Name of the model to train (e.g., 'random_forest', 'xgb', 'lgb', etc.).
+    :param strain: Strain identifier for the dataset to use.
+    :param cutoff: Cutoff value for filtering the data.
+    :param pub_id: Publication ID to use for training/testing.
+    :param package: Feature package to use ('benchmark', 'relational', or 'context').
+    :param y_column: Name of the target column in the dataset.
+    :param pooling: Pooling method to apply to the data (if any).
+    :param drop_intersecting: Whether to drop intersecting samples from the dataset.
+    :param logger: Logger instance for logging messages.
+    :param kwargs: Additional keyword arguments to hand over to subsequent functions.
+    :return: None. Results are logged and saved to the specified results directory.
+    '''
     # Load preprocessed data
     df, col_dict = load_preprocessed_data(strain)
     if df is None or col_dict is None:
@@ -769,78 +912,6 @@ def train_and_evaluate_model(test_type="single_dataset",
     start_time = datetime.datetime.now()
     logger.info(f"Starting for strain {strain}, publication ID {pub_id}={df[df['pub_id']==pub_id]['Publication'].iloc[0]}, cutoff {cutoff}, package {package}, pooling {pooling}, drop_intersecting {drop_intersecting}.")
     
-    '''
-    # apply per-publication pooling if specified
-    if pooling is not None:
-        logging.debug(f'before pooling: {df.shape}\n{df}')
-        df = apply_pooling(dataframe=df, method=pooling)
-        available_meta = [col for col in col_dict["meta"] if col in df.columns]
-        removed_constant_meta = [col for col in available_meta if df[col].nunique(dropna=False) <= 1]
-        if removed_constant_meta:
-            df.drop(removed_constant_meta, axis=1, errors="ignore", inplace=True)
-            logging.info(f'Removed constant meta columns after pooling: {removed_constant_meta}')
-        logging.debug(f'after pooling: {df.shape}\n{df}')
-
-    effective_meta_columns = [col for col in col_dict["meta"] if col in df.columns]
-    if removed_constant_meta:
-        logging.info(f'Effective meta columns after pooling/pruning: {effective_meta_columns}')
-
-    if drop_intersecting:
-        df = df[df["Intersecting"] == False].copy().reset_index(drop=True)
-
-    # Select feature columns based on package
-    if package == "benchmark":
-        feature_columns = col_dict["standard"] + effective_meta_columns
-    elif package == "relational":
-        feature_columns = col_dict["standard"] + effective_meta_columns + col_dict["vip"] + col_dict["clustering"]
-    elif package == "context":
-        feature_columns = col_dict["standard"] + effective_meta_columns + col_dict["vip"] + col_dict["clustering"] + col_dict["context"]
-    else:
-        logger.error(f"Invalid package specified: {package}. Must be one of 'benchmark', 'relational', or 'context'.")
-        return
-    feature_columns = feature_columns + [col for col in STANDARD_FEATURES_DEFAULT if col in df.columns and col not in feature_columns] # ensure all standard features are included
-
-    # normalize and scale feature values
-    df = normalize_by_length(df, feature_columns)
-    df = scale_features(df, feature_columns)
-
-    # split into training and testing datasets: for single_dataset, train on pub_id and test on the rest. For leave_one_out, train on everything except pub_id and test on pub_id.
-    if test_type == "single_dataset":
-        base_df = df[df["pub_id"] == pub_id].copy().reset_index(drop=True)
-        cross_df = df[df["pub_id"] != pub_id].copy().reset_index(drop=True)
-    elif test_type == "leave_one_out":
-        base_df = df[df["pub_id"] != pub_id].copy().reset_index(drop=True)
-        cross_df = df[df["pub_id"] == pub_id].copy().reset_index(drop=True)
-    else:
-        logger.error(f"Invalid test type specified: {test_type}. Must be one of 'single_dataset' or 'leave_one_out'.")
-        return
-
-    base_df = cutoff_clean(base_df, cutoff)
-    if base_df.empty or len(base_df) < 10: # if there are less than 10 samples left after cutoff, it's unlikely we can train a meaningful model
-        raise ValueError(f"Not enough training data left after applying cutoff for strain {strain}, pub_id {pub_id}, cutoff {cutoff}. Cannot train model.")
-    cross_df = cutoff_clean(cross_df, cutoff)
-
-    base_df = calculate_target(base_df, y_col=y_column)
-
-    X_base = base_df[feature_columns]
-
-    if X_base.empty:
-        logger.error(f"Training or validation data is empty after applying cutoff for strain {strain}, pub_id {pub_id}, cutoff {cutoff}. Cannot train model.")
-        return
-
-    if model_type == "reg":
-        y_base = base_df[y_column]
-    elif model_type == "clf":
-        y_base, thresholds = make_multiclass(base_df, y_column=y_column)
-    else:
-        logger.error(f"Invalid model type specified: {model_type}. Must be one of 'reg' or 'clf'.")
-        return
-    
-    X_train, X_test, y_train, y_test = train_test_split(X_base, y_base, test_size=0.2, random_state=42)
-
-    X_train = drop_non_numeric(X_train)
-    X_test = drop_non_numeric(X_test)'''
-    # datasplit and processing for later tests
     X_train, X_test, y_train, y_test, cross_df, feature_columns = prepare_data(df=df,
                                                                                col_dict=col_dict,
                                                                                test_type=test_type,
@@ -853,7 +924,8 @@ def train_and_evaluate_model(test_type="single_dataset",
                                                                                y_column=y_column,
                                                                                pooling=pooling,
                                                                                drop_intersecting=drop_intersecting,
-                                                                               logger=logger)
+                                                                               logger=logger,
+                                                                               **kwargs)
 
     logger.info(f"Data preparation completed. Columns: {len(feature_columns)}, Training samples: {len(X_train)}, Testing samples: {len(X_test)}, Cross-publication samples: {len(cross_df)}")
     if model_type == "reg":
@@ -862,7 +934,8 @@ def train_and_evaluate_model(test_type="single_dataset",
         model, training_results = train_classifier(X_train=X_train, y_train=y_train, X_test=X_test, y_test=y_test, perform_grid_search=True, seed=42, n_bins=len(set(y_train)), result_path=results_dir, clf_name=model_name, logger=logger)
     train_end_time = datetime.datetime.now()
     logger.info(f"Training completed. Time taken: {train_end_time - start_time}")
-    # test on the cross dataset
+
+    # evaluate out of domain performance on cross-publication data
     cross_df = calculate_target(cross_df, y_col=y_column)
     results = {}
     if model_type == "reg":
@@ -879,24 +952,19 @@ def train_and_evaluate_model(test_type="single_dataset",
             if model_type == "reg":
                 if test_type == "intersection":
                     y_column = "Num_Publications"
-                    threshold = max(2, int(np.ceil(len(STRAIN_TO_PUBS[strain])/2)))
-                    y_pub_cross = pub_cross_df[y_column].apply(lambda x: x if x < threshold else threshold).astype(int)/threshold 
-                    #y_pub_cross = pub_cross_df[y_column]/pub_cross_df[y_column].max() 
+                    threshold = max(2, int(np.ceil(len(STRAIN_WISE_PUBLICATIONS[strain])/2)))
+                    y_pub_cross = pub_cross_df[y_column].apply(lambda x: x if x < threshold else threshold).astype(int)/threshold
                 else:
                     y_pub_cross = pub_cross_df[y_column]
             elif model_type == "clf":
                 if test_type == "intersection":
                     y_column = "Num_Publications"
-                    threshold = max(2, int(np.ceil(len(STRAIN_TO_PUBS[strain])/2)))
+                    threshold = max(2, int(np.ceil(len(STRAIN_WISE_PUBLICATIONS[strain])/2)))
                     y_pub_cross = pub_cross_df[y_column].apply(lambda x: x if x < threshold else threshold).astype(int)
-                    #threshold = max(2, df["Publication"].nunique()/2)
-                    #y_pub_cross = (pub_cross_df[y_column] >= threshold).astype(int) 
                 else:
                     y_pub_cross, pub_cross_thresholds = make_multiclass(pub_cross_df, y_column=y_column, n_bins=2)
             try:
                 X_pub_cross = drop_non_numeric(X_pub_cross)
-                #X_pub_cross = drop_non_finite(X_pub_cross, logger=logger)
-                #y_pub_cross = drop_non_numeric(y_pub_cross)
                 if X_pub_cross.empty or y_pub_cross.empty:
                     continue
                 if model_type == "reg":
@@ -928,6 +996,7 @@ def train_and_evaluate_model(test_type="single_dataset",
 
     shap_path = os.path.join(results_dir, "regressor shaps" if model_type=="reg" else "classifier shaps")
     try:
+        logger.info(f"Starting SHAP value computation for model {model_name}.")
         compute_shap_values(model, X_train, X_test, model_name, shap_path, is_regression=model_type=="reg", logger=logger)
     except Exception as e:
         logger.error(f'Issue with shap value calculation:\n{e}')
@@ -935,25 +1004,10 @@ def train_and_evaluate_model(test_type="single_dataset",
     logger.info(f"SHAP value computation completed. Time taken: {shap_end_time - test_end_time}")
     logger.info(f"Total time taken for training, testing, and SHAP computation: {shap_end_time - start_time}")
 
-def setup_logging(verbose=False):
-    fmt_debug = '%(asctime)s - %(name)s - %(levelname)s - %(filename)s:%(lineno)s - %(message)s'
-    fmt_info  = '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-    
-    logging.basicConfig(handlers=[logging.StreamHandler()],
-                        format=fmt_debug if verbose else fmt_info,
-                        force=True)
-    logging.getLogger('shap').setLevel(logging.WARNING)
-    warnings.filterwarnings("ignore", category=UserWarning, module="matplotlib\..*")
-    logger = logging.getLogger("ModelTraining")
-    #logger.setFormatter(logging.Formatter(fmt_debug if verbose else fmt_info))
-    logger.setLevel(logging.DEBUG if verbose else logging.INFO)
-    return logger
-
-
 if __name__ == "__main__":
     warnings.filterwarnings("ignore")
-    parser = argparse.ArgumentParser(description='Short model testing.')
-    parser.add_argument('-t', '--test_type', type=str, help='Type of test to perform: single_dataset or leave_one_out', default='leave_one_out')
+    parser = argparse.ArgumentParser(description='Model training and evaluation for prediction of NGS read counts or publication counts, based on various feature sets.')
+    parser.add_argument('-t', '--test_type', type=str, help='Type of test to perform: single_dataset, leave_one_out or intersection', default='leave_one_out')
     parser.add_argument('-m', '--model_type', type=str, help='Type of model to train: regression (reg) or classification (clf)', default='reg')
     parser.add_argument('-d', '--strain', type=str, help='Strain to test on.', default='A_PuertoRico_8_1934')
     parser.add_argument('-i', '--pub_id', type=int, help='ID of the publication to filter for', default='1')
@@ -970,5 +1024,20 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     logger = setup_logging(verbose=args.verbose or args.debug)
-    params = {key: value for key, value in vars(args).items()}
-    train_and_evaluate_model(test_type=params["test_type"], model_type=params["model_type"], strain=params["strain"], cutoff=params["cutoff"], pub_id=params["pub_id"], package=params["package"], pooling=params["pooling"], drop_intersecting=params["drop_intersecting"], debug=params["debug"], y_column=params["y_column"], seed=params["seed"], logger=logger)
+    #params = {key: value for key, value in vars(args).items()}
+    params = vars(args)
+    #train_and_evaluate_model(test_type=params["test_type"], model_type=params["model_type"], strain=params["strain"], cutoff=params["cutoff"], pub_id=params["pub_id"], package=params["package"], pooling=params["pooling"], drop_intersecting=params["drop_intersecting"], debug=params["debug"], y_column=params["y_column"], seed=params["seed"], logger=logger)
+    
+    train_and_evaluate_model(
+        test_type=params["test_type"],
+        model_type=params["model_type"],
+        strain=params["strain"],
+        cutoff=params["cutoff"],
+        pub_id=params["pub_id"],
+        package=params["package"],
+        pooling=params["pooling"],
+        drop_intersecting=params["drop_intersecting"],
+        logger=logger,
+        y_column=params["y_column"],
+        seed=params["seed"],
+    )

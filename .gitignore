@@ -220,3 +220,7 @@ __marimo__/
 # local results
 results/
 dev_results/
+depr/
+*.out
+*preprocessed_data*.csv
+*processed_column_dict*.json

@@ -22,6 +22,7 @@ import distinctipy
 import seaborn as sns
 from functools import lru_cache
 # from nupack import complex_analysis, Model
+import traceback
 
 def read_json_lists(filename):
     with open(os.path.join(os.path.dirname(__file__), filename), 'r') as file:
@@ -31,8 +32,8 @@ def read_json_lists(filename):
 influenza_info = read_json_lists('influenza_info.json')#os.path.abspath(os.path.join(os.getcwd(), 'influenza_info.json')))
 
 DATA_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'data'))
-CLUSTERING_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), 'Clustering'))
-UNPOOLED_DATA_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'data_unpooled'))
+CLUSTERING_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), 'clustering'))
+UNPOOLED_DATA_DIR = DATA_DIR #os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'data_unpooled'))
 PUBLICATIONS = ["Lui2019", "Kupke2020", "Penn2022", "Sheng2018", "Zhuravlev2020", "vdHoecke2015", "Boussier2020", "Southgate2019", "Valesano2020", "Mendes2021", "Alnaji2019", "Berry2021", "Alnaji2021", "Wang2020", "Wang2023", "Pelz2021"]
 CHARS = influenza_info['rna_bases'] #"ACGU"
 CHARS_COUNT = len(CHARS)
@@ -56,7 +57,7 @@ STRAIN_WISE_PUB_COLORS = {strain: {pub: color for pub, color in zip(pubs, sns.co
 
 # take looger from main
 logger = logging.getLogger(__name__)
-logging.debug(f'Loaded influenza_info.json:\n{influenza_info}\nCHARS: {CHARS}\nSEGMENTS: {SEGMENTS}\nSTRAINS: {STRAINS}')
+logger.debug(f'Loaded influenza_info.json:\n{influenza_info}\nCHARS: {CHARS}\nSEGMENTS: {SEGMENTS}\nSTRAINS: {STRAINS}')
 # TODO: Comment
 # TODO: Update other files for reorganized feature calculation
 
@@ -85,8 +86,8 @@ def load_data(names: list, include_publication: bool = True, unpooled = False) -
         csv_paths.extend(publication_paths)
         pubs.extend(publication)
     assert len(csv_paths) > 0, f'No data found for {names}'
-    logging.debug(f'Found {len(csv_paths)} files for {names}:\n{csv_paths}')
-    logging.info(f'Loading data for {names}')
+    logger.debug(f'Found {len(csv_paths)} files for {names}:\n{csv_paths}')
+    logger.debug(f'Loading data for {names}')
 
     def load_and_label(file_path):
         '''
@@ -110,11 +111,11 @@ def load_data(names: list, include_publication: bool = True, unpooled = False) -
 
     dfs = [load_and_label(file_path) for file_path in csv_paths]
     final_df = pd.concat(dfs, ignore_index=True)
-    logging.debug(f'Loaded data for {names} with shape {final_df.shape}\nColumns: {list(final_df.columns)}')
+    logger.debug(f'Loaded data for {names} with shape {final_df.shape}\nColumns: {list(final_df.columns)}')
     final_df["Start"] = final_df["Start"].astype(int)
     final_df["End"] = final_df["End"].astype(int)
     final_df["NGS_read_count"] = final_df["NGS_read_count"].astype(int)
-    logging.debug(f'Datatypes:\n{final_df.dtypes}')
+    logger.debug(f'Datatypes:\n{final_df.dtypes}')
     #get_duplicates(final_df)
     if unpooled: # handle wang2020 duplicates by summing read counts, keeping other features the same
         final_df = final_df.groupby(["Strain","Segment","Start","End","ACC_num"]).agg({col: "first" if col != "NGS_read_count" else "sum" for col in final_df.columns}).reset_index(drop=True)
@@ -136,19 +137,19 @@ def get_sequence(strain: str, segment: str) -> str:
 
     :return: Sequence of the strains segment as a string
     '''
-    #logging.debug(f'DATA_DIR: {DATA_DIR}\nstrain: {strain}\nsegment: {segment}')
+    #logger.debug(f'DATA_DIR: {DATA_DIR}\nstrain: {strain}\nsegment: {segment}')
     fasta_file = os.path.join(DATA_DIR, strain, 'fastas', f'{segment}.fasta')
     seq_obj = SeqIO.read(fasta_file, 'fasta')
     return str(seq_obj.seq.transcribe())
 
 def get_sequence_quicker(df):
     if isinstance(df,types.GeneratorType):
-        logging.info("Getting sequences for Generator")
+        logger.debug("Getting sequences for Generator")
         return pd.concat([get_sequence_quicker(chunk) for chunk in df],ignore_index=True)
     df["Full_Sequence"] = ''
     if "Strain" not in df.columns or "Segment" not in df.columns or df["Strain"].isna().any() or df["Segment"].isna().any():
         if "ID" in df.columns:
-            logging.warning(f'Missing Strain and/or Segment info for some rows. Attempting to use ID column as fallback...')
+            logger.warning(f'Missing Strain and/or Segment info for some rows. Attempting to use ID column as fallback...')
             df[["Strain", "Segment", "tmp_Start", "tmp_End"]] = df["ID"].str.rsplit('_', n=3, expand=True)
             df.drop(columns=["tmp_Start","tmp_End"], inplace=True, errors="ignore")
 
@@ -156,13 +157,13 @@ def get_sequence_quicker(df):
         strain = group["Strain"].values[0]
         segment = group["Segment"].values[0]
         
-        #logging.info(f'id: {id}\nseg: {segment}\tstrain: {strain}')
+        #logger.debug(f'id: {id}\nseg: {segment}\tstrain: {strain}')
         fasta_file = os.path.join(DATA_DIR, strain, 'fastas', f'{segment}.fasta')
         seq_obj = SeqIO.read(fasta_file, 'fasta')
         seq = str(seq_obj.seq.transcribe()) 
         df.loc[group.index, "Full_Sequence"] = seq
         if len(seq)==0:
-            logging.warning(f'Empty sequence for {id} at {fasta_file}')
+            logger.warning(f'Empty sequence for {id} at {fasta_file}')
     return df
 
 
@@ -181,9 +182,9 @@ def strain_ohe(df: pd.DataFrame):
             pos = STRAINS.index(r['Strain'])
             res[i][pos] = 1
         except ValueError:
-            logging.error(f'Strain {r["Strain"]} not found in list of Strains')
+            logger.error(f'Strain {r["Strain"]} not found in list of Strains')
         except Exception as e:
-            logging.error(f'Error during Strain ohe calc: {e}')
+            logger.error(f'Error during Strain ohe calc: {e}')
 
     encoded_df = pd.DataFrame(res)
     encoded_df.columns = STRAINS
@@ -202,15 +203,15 @@ def segment_ohe(df: pd.DataFrame) -> pd.DataFrame:
     '''
     n = df.shape[0]
     res = np.zeros((n, SEGMENTS_COUNT), dtype=np.uint8)
-    #logging.debug(f'Calculating one hot encoding for {n} rows in res: {res.shape}')
+    #logger.debug(f'Calculating one hot encoding for {n} rows in res: {res.shape}')
     for i, r in df.iterrows():
         try:
             pos = SEGMENTS.index(r['Segment'])
             res[i][pos] = 1
         except ValueError:
-            logging.error(f'Segment {r["Segment"]} not found in list of segments')
+            logger.error(f'Segment {r["Segment"]} not found in list of segments')
         except Exception as e:
-            logging.error(f'Error during Segment ohe calc: {e}')
+            logger.error(f'Error during Segment ohe calc: {e}')
 
     encoded_df = pd.DataFrame(res)
     encoded_df.columns = SEGMENTS
@@ -226,9 +227,9 @@ def segment_ohe_quicker(df: pd.DataFrame) -> pd.DataFrame:
             seg = group["Segment"].values[0]
             df.loc[group.index, seg] = 1
         except ValueError:
-            logging.error(f'Segment {seg} not found in list of segments')
+            logger.error(f'Segment {seg} not found in list of segments')
         except Exception as e:
-            logging.error(f'Error during Segment ohe calc: {e}')
+            logger.error(f'Error during Segment ohe calc: {e}')
     return df
 
 
@@ -257,7 +258,7 @@ def sequence_ohe(df: pd.DataFrame) -> pd.DataFrame:
                 pos = CHARS.index(char)
                 res[i][j * CHARS_COUNT + pos] = 1
             except ValueError:
-                logging.error(f'(Sequence ohe) Character {char} not found in list of characters!\nChars: {CHARS}')
+                logger.error(f'(Sequence ohe) Character {char} not found in list of characters!\nChars: {CHARS}')
 
     encoded_df = pd.DataFrame(res)
     col_names = [f"{i}_{ch}" for i in range(1, MAX_LEN + 1) for ch in CHARS]
@@ -320,7 +321,7 @@ def get_junction_ohe(df):
                     pos = CHARS.index(char)
                     res[i][j * CHARS_COUNT + pos] = 1
                 except ValueError:
-                    logging.error(f'Character {char} not found in list of characters!\nChars: {CHARS}\tSite: {site}')
+                    logger.error(f'Character {char} not found in list of characters!\nChars: {CHARS}\tSite: {site}')
         encoded_df = pd.DataFrame(res)
         col_names = [f"{position}_{i}_{ch}" for i in range(1, win_size + 1) for ch in CHARS]
         encoded_df.columns = col_names
@@ -360,7 +361,7 @@ def get_junction_ohe_quicker(df, win_size=10):
                 idx = CHARS.index(char)
                 res[j * CHARS_COUNT + idx] = 1
             except ValueError:
-                logging.error(f'Character {char} not found in list of characters!\nChars: {CHARS}\tSite: {site}')
+                logger.error(f'Character {char} not found in list of characters!\nChars: {CHARS}\tSite: {site}')
         #print(f'{site}\n{[CHARS[i%4] for i in range(len(res)) if res[i]==1]}')
         return res
     
@@ -401,27 +402,27 @@ def get_ohes(df, features):
     try:
         non_tuple = [feature for feature in features if not isinstance(feature, tuple)]
         ohe_features = [feature for feature in non_tuple if feature.lower() in ohes]
-        logging.debug(f'Features to calculate one hot encodings for: {ohe_features}')
+        logger.debug(f'Features to calculate one hot encodings for: {ohe_features}')
     except Exception as e:
-        logging.error(f'Error: {e}')
+        logger.error(f'Error: {e}')
     for feature in ohe_features:
         try:
             match feature.lower():
                 case "strain":
-                    logging.debug(f'Calculating Strain ohe')
+                    logger.debug(f'Calculating Strain ohe')
                     df = strain_ohe(df)
                 case "segment":
-                    logging.debug(f'Calculating Segment ohe')
+                    logger.debug(f'Calculating Segment ohe')
                     #df = segment_ohe(df)
                     df = segment_ohe_quicker(df)
                 case "sequence":
-                    logging.debug(f'Calculating Sequence ohe')
+                    logger.debug(f'Calculating Sequence ohe')
                     df = sequence_ohe(df)
                 case "junction":
-                    logging.debug(f'Calculating Junction ohe')
+                    logger.debug(f'Calculating Junction ohe')
                     df = get_junction_ohe_quicker(df)
         except Exception as e:
-            logging.error(f'Error: {e}')
+            logger.error(f'Error: {e}')
     return df
 
 
@@ -641,7 +642,7 @@ def log_and_norm(df, norm = 'NGS_log_norm', experiment_col = 'Publication', drop
     df['NGS_log_norm'] = df['NGS_log'] / max(df['NGS_log'])
     df = df.drop(['NGS_read_count', 'NGS_log'], axis=1)
     '''
-    logging.info('Applying log and normalization to NGS read count.')
+    logger.debug('Applying log and normalization to NGS read count.')
     assert experiment_col in df.columns, f'Column {experiment_col} not found in dataframe'
     if 'NGS' in norm:
         df["NGS_read_count"] = df["NGS_read_count"].astype(float)
@@ -665,7 +666,7 @@ def log_and_norm(df, norm = 'NGS_log_norm', experiment_col = 'Publication', drop
                 df["NGS_log_robust_sig_norm"] = sigmoid_normalize(df["NGS_log_robust"])
                 df.drop("NGS_log_robust", axis=1,inplace=True)
             case _:
-                logging.error(f'Unknown norm method {norm} for log_and_norm! Applying standard log_norm instead.\nOptions: NGS_log_norm, NGS_log_min_max_norm')
+                logger.error(f'Unknown norm method {norm} for log_and_norm! Applying standard log_norm instead.\nOptions: NGS_log_norm, NGS_log_min_max_norm')
                 #df["NGS_log_norm"] = df["NGS_log"] / max(df["NGS_log"])
                 df["NGS_log_norm"] = df.groupby(experiment_col)["NGS_log"].transform(lambda x: x / x.max())
         if drop_read_count:
@@ -680,7 +681,7 @@ def log_and_norm(df, norm = 'NGS_log_norm', experiment_col = 'Publication', drop
                 df[norm] = df["Intersections"]/df[experiment_col].nunique()
                 df = df.drop(["Intersections"], axis=1)
             case _:
-                logging.error(f'Unknown norm method {norm} for log_and_norm! Applying standard norm instead.\nOptions: NGS_log_norm, NGS_log_min_max_norm')
+                logger.error(f'Unknown norm method {norm} for log_and_norm! Applying standard norm instead.\nOptions: NGS_log_norm, NGS_log_min_max_norm')
                 df[norm] = df["Intersections"]/df[experiment_col].nunique()
                 df = df.drop(["Intersections"], axis=1)
     #    if drop_read_count:
@@ -800,7 +801,7 @@ def get_vip_distance_features(df: pd.DataFrame, clustering_data: dict, vip_candi
         dist_matrix[col_name] = values
 
     if len(dist_matrix) == 0:
-        logging.warning("No valid VIP coordinate references found for distance features")
+        logger.warning("No valid VIP coordinate references found for distance features")
         return df
 
     if summary and len(dist_matrix) > 1:
@@ -847,7 +848,7 @@ def get_centroid_distance_features(df: pd.DataFrame, clustering_data: dict, summ
         dist_matrix[col_name] = values
 
     if len(dist_matrix) == 0:
-        logging.warning("No valid cluster centroid references found for distance features")
+        logger.warning("No valid cluster centroid references found for distance features")
         return df
 
     if summary and len(dist_matrix) > 1:
@@ -1002,7 +1003,7 @@ def get_cluster_context_features(df: pd.DataFrame, clustering_data: dict, metric
     missing_cluster = work["cluster_id"].isna()
     if missing_cluster.any():
         missing_count = int(missing_cluster.sum())
-        logging.warning(
+        logger.warning(
             f"{missing_count} rows are missing cluster assignments for context feature '{metric}'. "
             f"Assigning noise_label={noise_label} as fallback."
         )
@@ -1072,7 +1073,7 @@ def get_cluster_membership_onehot_features(df: pd.DataFrame, clustering_data: di
     missing_mask = cluster_series.isna()
     if missing_mask.any():
         missing_count = int(missing_mask.sum())
-        logging.warning(
+        logger.warning(
             f"{missing_count} rows are missing cluster assignments for one-hot context feature. "
             f"Assigning noise_label={noise_label} as fallback."
         )
@@ -1117,7 +1118,7 @@ def get_sample_cluster_context_features(df: pd.DataFrame, clustering_data: dict,
     missing_cluster = work["cluster_id"].isna()
     if missing_cluster.any():
         missing_count = int(missing_cluster.sum())
-        logging.warning(
+        logger.warning(
             f"{missing_count} rows are missing cluster assignments for sample-level context feature '{metric}'. "
             f"Assigning noise_label={noise_label} as fallback."
         )
@@ -1203,17 +1204,17 @@ def get_k_identities(df: pd.DataFrame, candidates: list):
 
     prefilled_cols = set([prefil for prefil in [f'{cand}_identity' for cand in candidates] if prefil in df.columns])
     if len(prefilled_cols) > 0:
-        logging.warning(f'The following {len(prefilled_cols)} identity columns already exist and will be skipped: {list(prefilled_cols)}')
+        logger.warning(f'The following {len(prefilled_cols)} identity columns already exist and will be skipped: {list(prefilled_cols)}')
     present_vips = [vip for vip in candidates if vip in set(df["ID"].unique().tolist()) and f'{vip}_identity' not in prefilled_cols]
     not_present_vips = [vip for vip in candidates if vip not in present_vips and f'{vip}_identity' not in prefilled_cols]
     if len(not_present_vips) > 0:
-        logging.warning(f'The following candidates were not found in the dataframe and will have their remaining sequences calculated from their ID: {list(not_present_vips)}')
-    logging.debug(f'Getting remaining sequences for {len(present_vips)} from precomputed remaining sequence')
+        logger.warning(f'The following candidates were not found in the dataframe and will have their remaining sequences calculated from their ID: {list(not_present_vips)}')
+    logger.debug(f'Getting remaining sequences for {len(present_vips)} from precomputed remaining sequence')
     vip_seqs = {}
     for vip in present_vips:
         rem = df.loc[df["ID"]==vip, 'Remaining'].values[0]
         vip_seqs[vip] = rem
-    logging.debug(f'Getting remaining sequences for {len(not_present_vips)} from ID parsing and sequence retrieval')
+    logger.debug(f'Getting remaining sequences for {len(not_present_vips)} from ID parsing and sequence retrieval')
     for vip in not_present_vips:
         strain, seg, start, end = parse_candidate_id(vip)
         full = get_sequence(strain, seg)
@@ -1228,15 +1229,15 @@ def get_k_identities(df: pd.DataFrame, candidates: list):
             max_len = max(len(ref), len(seq))
             return 1 - edit_dist / max_len
     except ImportError:
-        logging.warning('edlib not found, falling back to slower pairwise aligner for identity calculations. Install edlib for faster performance.')
+        logger.warning('edlib not found, falling back to slower pairwise aligner for identity calculations. Install edlib for faster performance.')
         def identity(ref, seq):
             alignment = aligner.align(ref, seq)[0]
             matches = sum(1 for a, b in zip(alignment.aligned[0], alignment.aligned[1]))
             return matches / max(len(ref), len(seq))
         
-    logging.debug(f'Calculating identities for {len(candidates)-len(prefilled_cols)} candidates against {df["ID"].nunique()} dataframe sequences')
+    logger.debug(f'Calculating identities for {len(candidates)-len(prefilled_cols)} candidates against {df["ID"].nunique()} dataframe sequences')
     if df["ID"].nunique() < 100 or len(candidates) - len(prefilled_cols) < 10:
-        logging.debug('Small scale identity calculation, using simple for loop.')
+        logger.debug('Small scale identity calculation, using simple for loop.')
         for id, group in df.groupby("ID"):
             for cand in vip_seqs.keys():
                 if f'{cand}_identity' in prefilled_cols:
@@ -1252,7 +1253,7 @@ def get_k_identities(df: pd.DataFrame, candidates: list):
                 df.loc[group.index, f'{cand}_identity'] = identity(ref_seq, seq)#matches/max(len(ref_seq),len(seq))
                 #df.loc[group.index, f'{cand}_identity'] = aligner.score(ref_seq,seq)/max(len(ref_seq),len(seq))
     else:
-        logging.debug('Large scale identity calculation, using alternative approach.')
+        logger.debug('Large scale identity calculation, using alternative approach.')
         
         unique_seqs = df["Remaining"].unique()
         for cand, ref_seq in vip_seqs.items():
@@ -1272,7 +1273,7 @@ def get_k_identities(df: pd.DataFrame, candidates: list):
     return df
 
 def get_k_diffs(df: pd.DataFrame, candidates: list):
-    logging.info("Calculating vip ngs count differences")
+    logger.debug("Calculating vip ngs count differences")
     def min_max_scale(group):
         for cand in candidates:
             col = f'{cand}_diff'
@@ -1312,7 +1313,7 @@ def get_kmer_jaccard_similiarities(df:pd.DataFrame, candidates:list, k_list:list
         #return kmers
         return {seq[i:i+k] for k in k_list for i in range(len(seq) - k + 1)}
 
-    logging.info("Calculating kmer jaccard-similarities")
+    logger.debug("Calculating kmer jaccard-similarities")
     remove_id = False
     if not "ID" in df.columns:
         df = identify_candidates(df)
@@ -1321,35 +1322,19 @@ def get_kmer_jaccard_similiarities(df:pd.DataFrame, candidates:list, k_list:list
     if not "Remaining" in df.columns:
         df = get_remaining_sequence(df)
         remove_remaining = True
-        
-    '''try:
-        vip_kmers = {vip: df.loc[df['ID'] == vip, 'kmers'].values[0] for vip in candidates}
-    except Exception as e:
-        logging.error(f'Issue with kmer jaccard-similarities:\n{e}\nTrying extra safe method.')
-        vip_kmers = {}
-        for vip in candidates:
-            if "ID" not in df["ID"].unique():
-                logging.debug(f'VIP not found in dataframe: {vip}\nCalculating kmers from ID..')
-                strain, seg, start, end = parse_candidate_id(vip)
-                full = get_sequence(strain, seg)
-                rem = full[:start-1]+full[end:]
-                vip_kmers[vip] = get_multi_kmers(rem)
-            elif len(df.loc[df["ID"]==vip, 'kmers'].values) < 1:
-                logging.error(f'VIP without kmers: {vip}')
-            else:
-                vip_kmers[vip] = df.loc[df['ID'] == vip, 'kmers'].values[0]'''
+
     vip_kmers = {}
     seq_to_kmers = {}
     present_vips = [vip for vip in candidates if vip in set(df["ID"].unique().tolist())]
     not_present_vips = [vip for vip in candidates if vip not in present_vips]
     if len(not_present_vips) > 0:
-        logging.warning(f'The following candidates were not found in the dataframe and will have their kmers calculated from their ID: {list(not_present_vips)}')
-    logging.debug(f'Getting kmers for {len(present_vips)} from precomputed remaining sequence')
+        logger.warning(f'The following candidates were not found in the dataframe and will have their kmers calculated from their ID: {list(not_present_vips)}')
+    logger.debug(f'Getting kmers for {len(present_vips)} from precomputed remaining sequence')
     for vip in present_vips:
         rem = df.loc[df["ID"]==vip, 'Remaining'].values[0]
         vip_kmers[vip] = get_multi_kmers(rem)
         seq_to_kmers[rem] = vip_kmers[vip]
-    logging.debug(f'Getting kmers for {len(not_present_vips)} from ID parsing and sequence retrieval')
+    logger.debug(f'Getting kmers for {len(not_present_vips)} from ID parsing and sequence retrieval')
     for vip in not_present_vips:
         strain, seg, start, end = parse_candidate_id(vip)
         full = get_sequence(strain, seg)
@@ -1358,9 +1343,9 @@ def get_kmer_jaccard_similiarities(df:pd.DataFrame, candidates:list, k_list:list
         seq_to_kmers[rem] = vip_kmers[vip]
     prefilled_cols = set([prefil for prefil in [f'{cand}_kmer_sim' for cand in candidates] if prefil in df.columns])
     if len(prefilled_cols) > 0:
-        logging.warning(f'The following {len(prefilled_cols)} kmer similarity columns already exist and will be skipped: {list(prefilled_cols)}')
+        logger.warning(f'The following {len(prefilled_cols)} kmer similarity columns already exist and will be skipped: {list(prefilled_cols)}')
 
-    logging.debug(f'Calculating kmer similarities for {df["ID"].nunique()} IDs to {len(candidates)} candidates')
+    logger.debug(f'Calculating kmer similarities for {df["ID"].nunique()} IDs to {len(candidates)} candidates')
     seq_to_kmers.update({seq: get_multi_kmers(seq) for seq in df["Remaining"].unique() if seq not in seq_to_kmers})
     results = {cand: {} for cand in vip_kmers}
 
@@ -1419,7 +1404,7 @@ def calculate_standard_features(dataframe: pd.DataFrame, features: list, seq_req
 
         :return: DataFrame with all features calculated and non-numerical columns removed
     '''
-    logging.debug(f'Loaded influenza_info.json:\n{influenza_info}\nCHARS: {CHARS}\nSEGMENTS: {SEGMENTS}\nSTRAINS: {STRAINS}')
+    logger.debug(f'Loaded influenza_info.json:\n{influenza_info}\nCHARS: {CHARS}\nSEGMENTS: {SEGMENTS}\nSTRAINS: {STRAINS}')
 
     if inplace:
         df = dataframe
@@ -1431,8 +1416,7 @@ def calculate_standard_features(dataframe: pd.DataFrame, features: list, seq_req
 
     # Helper to speed up calculations that use the full sequence
     if seq_req:
-        logging.debug(f'Calculating full sequence for each input row.')
-        #df["Full_Sequence"] = df.apply(lambda row: get_sequence(row['Strain'], row['Segment']), axis=1)
+        logger.debug(f'Calculating full sequence for each input row.')
         df = get_sequence_quicker(df)
 
     for feat in features:
@@ -1441,41 +1425,37 @@ def calculate_standard_features(dataframe: pd.DataFrame, features: list, seq_req
                 case 'K-VIPs':
                     vip_lists = read_json_lists("vips.json")
                     #"scaffold_hdbscan_A_PuertoRico_8_1934"
-                    logging.debug('Calculating K-Varying')
+                    logger.debug('Calculating K-Varying')
                     chosen_list = list(vip_lists)[feat[1]]
                     k_vary_candidates = vip_lists[chosen_list]
                     #print(k_vary_candidates)
-                    logging.info(f'Using K-Varying VIPs of list {chosen_list}: {list(k_vary_candidates)}\n\n')
+                    logger.debug(f'Using K-Varying VIPs of list {chosen_list}: {list(k_vary_candidates)}\n\n')
                     df = get_k_varying(df, k_vary_candidates, feat[2], feat[3])
                     df = get_k_identities(df, k_vary_candidates)
                     if len(feat) > 4:
                         df = get_kmer_jaccard_similiarities(df, k_vary_candidates, feat[4])
                 case 'K-Varying':
-                    #try:
-                    logging.debug('Calculating K-Varying')
+                    logger.debug('Calculating K-Varying')
                     k_vary_candidates = find_k_varying(df, feat[1], feat[2], feat[4] if len(feat)==5 else 'std')
-                    #print(k_vary_candidates)
-                    logging.info(f'K-Varying Candidates: {list(k_vary_candidates)}\n\n')
+                    logger.debug(f'K-Varying Candidates: {list(k_vary_candidates)}\n\n')
                     df = get_k_varying(df, k_vary_candidates, feat[2], feat[3])
                     df = get_k_identities(df, k_vary_candidates)
                     if len(feat) > 5:
                         df = get_kmer_jaccard_similiarities(df, k_vary_candidates, feat[5])
-                    #except Exception as e:
-                    #    logging.error(f'Error: {e}')
                 case 'Radius':
-                    logging.debug('Calculating fuzzy locations')
+                    logger.debug('Calculating fuzzy locations')
                     df = get_fuzzy_locations(df)
                 case _:
-                    logging.info(f'\n {feat[0]} not found and therefore ignored')
+                    logger.debug(f'\n {feat[0]} not found and therefore ignored')
         else:
             match feat.lower():
                 case '3_5_ratio':
                     assert 'Full_Sequence' in df.columns, 'Full_Sequence column needed for 3_5_ratio calculation'
-                    logging.debug('Calculating 3_5_ratio')
+                    logger.debug('Calculating 3_5_ratio')
                     df["3_5_ratio"] = df.apply(lambda row: get_3_5_ratio(row), axis=1)
                 case 'di_length':
                     assert 'Full_Sequence' in df.columns, 'Full_Sequence column needed for DI_Length calculation'
-                    logging.debug('Calculating DI_Length')
+                    logger.debug('Calculating DI_Length')
                     df["DI_Length"] = df.apply(lambda row: get_DI_Length(row), axis=1)
                     if scaling == "standard":
                         df["DI_Length"] = StandardScaler().fit_transform(pd.DataFrame(df["DI_Length"]))
@@ -1485,7 +1465,7 @@ def calculate_standard_features(dataframe: pd.DataFrame, features: list, seq_req
                         df["DI_Length"] = (df["DI_Length"]-minimum)/(maximum-minimum) # feature scaling to [0,1]
                 case 'remaining_length':
                     assert 'Full_Sequence' in df.columns, 'Full_Sequence column needed for DI_Length calculation'
-                    logging.debug('Calculating remaining_length (DI_Length)')
+                    logger.debug('Calculating remaining_length (DI_Length)')
                     df["remaining_length"] = df.apply(lambda row: get_DI_Length(row), axis=1)
                     if scaling == "standard":
                         df["remaining_length"] = StandardScaler().fit_transform(pd.DataFrame(df["remaining_length"]))
@@ -1494,7 +1474,7 @@ def calculate_standard_features(dataframe: pd.DataFrame, features: list, seq_req
                         maximum = df["remaining_length"].max()
                         df["remaining_length"] = (df["remaining_length"]-minimum)/(maximum-minimum) # feature scaling to [0,1]
                 case 'deletion_length':
-                    logging.debug('Calculating deletion_length')
+                    logger.debug('Calculating deletion_length')
                     df["deletion_length"] = df.apply(lambda row: get_deletion_length(row), axis=1)
                     if scaling == "standard":
                         df["deletion_length"] = StandardScaler().fit_transform(pd.DataFrame(df["deletion_length"]))
@@ -1504,9 +1484,9 @@ def calculate_standard_features(dataframe: pd.DataFrame, features: list, seq_req
                         df["deletion_length"] = (df["deletion_length"]-minimum)/(maximum-minimum) # feature scaling to [0,1]
                 case 'direct_repeat':
                     assert 'Full_Sequence' in df.columns, 'Full_Sequence column needed for Direct_repeat calculation'
-                    logging.debug('Calculating Direct_repeat')
+                    logger.debug('Calculating Direct_repeat')
                     df["Direct_repeat"] = df.apply(lambda row: get_direct_repeat_length(row), axis=1)
-                    #logging.info(f'Direct_repeat columns:\n{df["Direct_repeat"].head()}\n{df["Direct_repeat"].describe()}\n\nFull df:\n{df.head()}\n{df.describe()}')
+                    #logger.debug(f'Direct_repeat columns:\n{df["Direct_repeat"].head()}\n{df["Direct_repeat"].describe()}\n\nFull df:\n{df.head()}\n{df.describe()}')
                     # normalizing to [0,1]
                     #minimum = df["Direct_repeat"].min()
                     #maximum = df["Direct_repeat"].max()
@@ -1518,7 +1498,7 @@ def calculate_standard_features(dataframe: pd.DataFrame, features: list, seq_req
                         df["Direct_repeat"] = (df["Direct_repeat"]-minimum)/(maximum-minimum)
                 case '3_5_diff':
                     assert 'Full_Sequence' in df.columns, 'Full_Sequence column needed for 3_5_diff calculation'
-                    logging.debug('Calculating 3_5_diff')
+                    logger.debug('Calculating 3_5_diff')
                     df["3_5_diff"] = df.apply(lambda row: get_3_5_diff(row), axis=1)
                     if scaling == "standard":
                         df["3_5_diff"] = StandardScaler().fit_transform(pd.DataFrame(df["3_5_diff"]))
@@ -1532,7 +1512,7 @@ def calculate_standard_features(dataframe: pd.DataFrame, features: list, seq_req
                         df["3_5_diff"] = df["3_5_diff"]/(2*maximum)
                 case 'length_proportion':
                     assert 'Full_Sequence' in df.columns, 'Full_Sequence column needed for length_proportion calculation'
-                    logging.debug('Calculating length_proportion')
+                    logger.debug('Calculating length_proportion')
                     df["length_proportion"] = df.apply(lambda row: get_length_proportion(row), axis=1)
                     if scaling == "standard":
                         df["length_proportion"] = StandardScaler().fit_transform(pd.DataFrame(df["length_proportion"]))
@@ -1540,10 +1520,10 @@ def calculate_standard_features(dataframe: pd.DataFrame, features: list, seq_req
                     #minimum = df["length_proportion"].min()
                     #maximum = df["length_proportion"].max()
                     #df["length_proportion"] = (df["length_proportion"]-minimum)/(maximum-minimum)
-                    logging.debug(f'Found {df[df["length_proportion"]>=0.85].shape[0]} long DelVGs out of {df.shape[0]} total.')
+                    logger.debug(f'Found {df[df["length_proportion"]>=0.85].shape[0]} long DelVGs out of {df.shape[0]} total.')
                 case 'peptide_length':
                     assert 'Full_Sequence' in df.columns, 'Full_Sequence column needed for Peptide_Length calculation'
-                    logging.debug('Calculating Peptide_Length')
+                    logger.debug('Calculating Peptide_Length')
                     df['Peptide_Length'] = df.apply(lambda row: get_peptide_len(row), axis=1)
                     if scaling == "standard":
                         df["Peptide_Length"] = StandardScaler().fit_transform(pd.DataFrame(df["Peptide_Length"]))
@@ -1554,7 +1534,7 @@ def calculate_standard_features(dataframe: pd.DataFrame, features: list, seq_req
                         df["Peptide_Length"] = (df["Peptide_Length"]-minimum)/(maximum-minimum)
                 case 'delta_g':
                     assert 'Full_Sequence' in df.columns, 'Full_Sequence column needed for Delta_G calculation'
-                    logging.debug('Calculating Delta_G')
+                    logger.debug('Calculating Delta_G')
                     df['Delta_G'] = df.apply(lambda row: get_delta_G(row), axis=1)
                     if scaling == "standard":
                         df["Delta_G"] = StandardScaler().fit_transform(pd.DataFrame(df["Delta_G"]))
@@ -1565,7 +1545,7 @@ def calculate_standard_features(dataframe: pd.DataFrame, features: list, seq_req
                         df["Delta_G"] = (df["Delta_G"]-minimum)/(maximum-minimum)
                 case _:
                     if not (feat.lower() in ["start", "end", "junction", "strain", "segment", "sequence"]):
-                        logging.info(f'\n {feat:s} not found and therefore ignored')
+                        logger.debug(f'\n {feat:s} not found and therefore ignored')
     df = get_ohes(df, features)
     if 'Start' not in features:
         df = df.drop("Start", axis=1)
@@ -1584,7 +1564,7 @@ def calculate_standard_features(dataframe: pd.DataFrame, features: list, seq_req
     #if only_numeric:
     #    df = drop_non_numeric(df)
 
-    logging.debug(f'Resulting dataframe after feature calculation: {list(df.columns)}\n{df.head()}\n')
+    logger.debug(f'Resulting dataframe after feature calculation: {list(df.columns)}\n{df.head()}\n')
     # TODO: Go over uses and make sure this is right before you change it.
     #if inplace:
         #return 
@@ -1605,13 +1585,13 @@ def get_standard_feature(dataframe:pd.DataFrame,
     match feature.lower():
         case '3_5_ratio':
             assert 'Full_Sequence' in df.columns, 'Full_Sequence column needed for 3_5_ratio calculation'
-            logging.debug('Calculating 3_5_ratio')
+            logger.debug('Calculating 3_5_ratio')
             df["3_5_ratio"] = df.apply(lambda row: get_3_5_ratio(row), axis=1)
             if scale == "standard":
                 df["3_5_ratio"] = StandardScaler().fit_transform(pd.DataFrame(df["3_5_ratio"]))
         case 'di_length':
             assert 'Full_Sequence' in df.columns, 'Full_Sequence column needed for DI_Length calculation'
-            logging.debug('Calculating DI_Length')
+            logger.debug('Calculating DI_Length')
             df["DI_Length"] = df.apply(lambda row: get_DI_Length(row), axis=1)
             if normalize_by_length:
                 df["DI_Length"] = df["DI_Length"]/df["Full_Sequence"].transform(len) # to [0,1]
@@ -1625,7 +1605,7 @@ def get_standard_feature(dataframe:pd.DataFrame,
                 df["DI_Length"] = (df["DI_Length"]-minimum)/(maximum-minimum) # feature scaling to [0,1]
         case 'remaining_length':
             assert 'Full_Sequence' in df.columns, 'Full_Sequence column needed for DI_Length calculation'
-            logging.debug('Calculating remaining_length (DI_Length)')
+            logger.debug('Calculating remaining_length (DI_Length)')
             df["remaining_length"] = df.apply(lambda row: get_DI_Length(row), axis=1)
             if normalize_by_length:
                 df["remaining_length"] = df["remaining_length"]/df["Full_Sequence"].transform(len) # to [0,1]
@@ -1638,7 +1618,7 @@ def get_standard_feature(dataframe:pd.DataFrame,
                 maximum = df["remaining_length"].max()
                 df["remaining_length"] = (df["remaining_length"]-minimum)/(maximum-minimum) # feature scaling to [0,1]
         case 'deletion_length':
-            logging.debug('Calculating deletion_length')
+            logger.debug('Calculating deletion_length')
             df["deletion_length"] = df.apply(lambda row: get_deletion_length(row), axis=1)
             if normalize_by_length:
                 df["deletion_length"] = df["deletion_length"]/df["Full_Sequence"].transform(len) # to [0,1]
@@ -1652,23 +1632,19 @@ def get_standard_feature(dataframe:pd.DataFrame,
                 df["deletion_length"] = (df["deletion_length"]-minimum)/(maximum-minimum) # feature scaling to [0,1]
         case 'direct_repeat':
             assert 'Full_Sequence' in df.columns, 'Full_Sequence column needed for Direct_repeat calculation'
-            logging.debug('Calculating Direct_repeat')
+            logger.debug('Calculating Direct_repeat')
             df["Direct_repeat"] = df.apply(lambda row: get_direct_repeat_length(row), axis=1)
-            #logging.info(f'Direct_repeat columns:\n{df["Direct_repeat"].head()}\n{df["Direct_repeat"].describe()}\n\nFull df:\n{df.head()}\n{df.describe()}')
             if scale == "standard":
                 df["Direct_repeat"] = StandardScaler().fit_transform(pd.DataFrame(df["Direct_repeat"]))
             elif scale == "none":
                 pass
             else:
-                # normalizing to [0,1]
-                #minimum = df["Direct_repeat"].min()
-                #maximum = df["Direct_repeat"].max()
                 minimum = 0
                 maximum = 15
                 df["Direct_repeat"] = (df["Direct_repeat"]-minimum)/(maximum-minimum)
         case '3_5_diff':
             assert 'Full_Sequence' in df.columns, 'Full_Sequence column needed for 3_5_diff calculation'
-            logging.debug('Calculating 3_5_diff')
+            logger.debug('Calculating 3_5_diff')
             df["3_5_diff"] = df.apply(lambda row: get_3_5_diff(row), axis=1)
             if normalize_by_length:
                 df["3_5_diff"] = df["3_5_diff"]/df["Full_Sequence"].transform(len) # to [0,1]
@@ -1686,7 +1662,7 @@ def get_standard_feature(dataframe:pd.DataFrame,
                 df["3_5_diff"] = df["3_5_diff"]/(2*maximum)
         case 'length_proportion':
             assert 'Full_Sequence' in df.columns, 'Full_Sequence column needed for length_proportion calculation'
-            logging.debug('Calculating length_proportion')
+            logger.debug('Calculating length_proportion')
             df["length_proportion"] = df.apply(lambda row: get_length_proportion(row), axis=1)
             if scale == "standard":
                 df["length_proportion"] = StandardScaler().fit_transform(pd.DataFrame(df["length_proportion"]))
@@ -1697,10 +1673,10 @@ def get_standard_feature(dataframe:pd.DataFrame,
                 minimum = df["length_proportion"].min()
                 maximum = df["length_proportion"].max()
                 df["length_proportion"] = (df["length_proportion"]-minimum)/(maximum-minimum)
-            logging.debug(f'Found {df[df["length_proportion"]>=0.85].shape[0]} long DelVGs out of {df.shape[0]} total.')
+            logger.debug(f'Found {df[df["length_proportion"]>=0.85].shape[0]} long DelVGs out of {df.shape[0]} total.')
         case 'peptide_length':
             assert 'Full_Sequence' in df.columns, 'Full_Sequence column needed for Peptide_Length calculation'
-            logging.debug('Calculating Peptide_Length')
+            logger.debug('Calculating Peptide_Length')
             df['Peptide_Length'] = df.apply(lambda row: get_peptide_len(row), axis=1)
             if scale == "standard":
                 df["Peptide_Length"] = StandardScaler().fit_transform(pd.DataFrame(df["Peptide_Length"]))
@@ -1713,7 +1689,7 @@ def get_standard_feature(dataframe:pd.DataFrame,
                 df["Peptide_Length"] = (df["Peptide_Length"]-minimum)/(maximum-minimum)
         case 'delta_g':
             assert 'Full_Sequence' in df.columns, 'Full_Sequence column needed for Delta_G calculation'
-            logging.debug('Calculating Delta_G')
+            logger.debug('Calculating Delta_G')
             df['Delta_G'] = df.apply(lambda row: get_delta_G(row), axis=1)
             if scale == "standard":
                 df["Delta_G"] = StandardScaler().fit_transform(pd.DataFrame(df["Delta_G"]))
@@ -1726,7 +1702,7 @@ def get_standard_feature(dataframe:pd.DataFrame,
                 df["Delta_G"] = (df["Delta_G"]-minimum)/(maximum-minimum)
         case '3_len':
             assert 'Full_Sequence' in df.columns, 'Full_Sequence column needed for 3_len calculation'
-            logging.debug('Calculating 3_len')
+            logger.debug('Calculating 3_len')
             df["3_len"] = df.apply(lambda row: get_3_len(row), axis=1)
             if normalize_by_length:
                 df["3_len"] = df["3_len"]/df["Full_Sequence"].transform(len) # to [0,1]
@@ -1744,7 +1720,7 @@ def get_standard_feature(dataframe:pd.DataFrame,
                 df["3_len"] = df["3_len"]/(2*maximum)
         case '5_len':
             assert 'Full_Sequence' in df.columns, 'Full_Sequence column needed for 5_len calculation'
-            logging.debug('Calculating 5_len')
+            logger.debug('Calculating 5_len')
             df["5_len"] = df.apply(lambda row: get_5_len(row), axis=1)
             if normalize_by_length:
                 df["5_len"] = df["5_len"]/df["Full_Sequence"].transform(len) # to [0,1]
@@ -1762,7 +1738,7 @@ def get_standard_feature(dataframe:pd.DataFrame,
                 df["5_len"] = df["5_len"]/(2*maximum)
         case _:
             if not (feature.lower() in ["start", "end", "junction", "strain", "segment", "sequence"]):
-                logging.info(f'\n {feature:s} not found and therefore ignored')
+                logger.debug(f'\n {feature:s} not found and therefore ignored')
     
     return df
 
@@ -1786,15 +1762,15 @@ def get_intersection_feature(dataframe:pd.DataFrame,
             if vips:
                 df = get_kmer_jaccard_similiarities(df=df, candidates=vips, k_list=[4,5,6])
             else:
-                logging.warning("Intersection feature kmer_jaccard requested without VIP candidates; skipping")
+                logger.warning("Intersection feature kmer_jaccard requested without VIP candidates; skipping")
         case 'identities':
             if vips:
                 df = get_k_identities(df=df, candidates=vips)
             else:
-                logging.warning("Intersection feature identities requested without VIP candidates; skipping")
+                logger.warning("Intersection feature identities requested without VIP candidates; skipping")
         case 'umap_distances' | 'embedding_distances':
             if clustering_data is None:
-                logging.warning("Intersection feature umap_distances requested without clustering_data; skipping")
+                logger.warning("Intersection feature umap_distances requested without clustering_data; skipping")
             else:
                 if use_vip_references and vips:
                     df = get_vip_distance_features(
@@ -1818,7 +1794,7 @@ def get_intersection_feature(dataframe:pd.DataFrame,
                 )
         case 'motif_consensus_identity' | 'cluster_motif_identity':
             if clustering_data is None:
-                logging.warning("Motif consensus feature requested without clustering_data; skipping")
+                logger.warning("Motif consensus feature requested without clustering_data; skipping")
             else:
                 df = get_cluster_motif_identity_features(
                     df=df,
@@ -1826,7 +1802,7 @@ def get_intersection_feature(dataframe:pd.DataFrame,
                     flank=motif_flank,
                 )
         case _:
-            logging.info(f'Intersection feature {feature} not found and therefore ignored')
+            logger.debug(f'Intersection feature {feature} not found and therefore ignored')
     return df
 
 def get_context_feature(dataframe:pd.DataFrame,
@@ -1846,15 +1822,15 @@ def get_context_feature(dataframe:pd.DataFrame,
             if vips:
                 df = get_current_values(df=df, candidates=vips, y_column=target_column, experiment_col=experiment_col)
             else:
-                logging.warning("Context feature current_results requested without VIP candidates; skipping")
+                logger.warning("Context feature current_results requested without VIP candidates; skipping")
         case 'last_results':
             if vips:
                 df = get_last_values(df=df, candidates=vips, y_column=target_column, experiment_col=experiment_col)
             else:
-                logging.warning("Context feature last_results requested without VIP candidates; skipping")
+                logger.warning("Context feature last_results requested without VIP candidates; skipping")
         case 'cluster_mean_signal':
             if clustering_data is None:
-                logging.warning("Context feature cluster_mean_signal requested without clustering_data; skipping")
+                logger.warning("Context feature cluster_mean_signal requested without clustering_data; skipping")
             else:
                 df = get_cluster_context_features(
                     df=df,
@@ -1865,7 +1841,7 @@ def get_context_feature(dataframe:pd.DataFrame,
                 )
         case 'cluster_median_signal':
             if clustering_data is None:
-                logging.warning("Context feature cluster_median_signal requested without clustering_data; skipping")
+                logger.warning("Context feature cluster_median_signal requested without clustering_data; skipping")
             else:
                 df = get_cluster_context_features(
                     df=df,
@@ -1876,7 +1852,7 @@ def get_context_feature(dataframe:pd.DataFrame,
                 )
         case 'cluster_rank_percentile':
             if clustering_data is None:
-                logging.warning("Context feature cluster_rank_percentile requested without clustering_data; skipping")
+                logger.warning("Context feature cluster_rank_percentile requested without clustering_data; skipping")
             else:
                 df = get_cluster_context_features(
                     df=df,
@@ -1887,7 +1863,7 @@ def get_context_feature(dataframe:pd.DataFrame,
                 )
         case 'cluster_coverage':
             if clustering_data is None:
-                logging.warning("Context feature cluster_coverage requested without clustering_data; skipping")
+                logger.warning("Context feature cluster_coverage requested without clustering_data; skipping")
             else:
                 df = get_cluster_context_features(
                     df=df,
@@ -1898,7 +1874,7 @@ def get_context_feature(dataframe:pd.DataFrame,
                 )
         case 'sample_cluster_mean_signal':
             if clustering_data is None:
-                logging.warning("Context feature sample_cluster_mean_signal requested without clustering_data; skipping")
+                logger.warning("Context feature sample_cluster_mean_signal requested without clustering_data; skipping")
             else:
                 df = get_sample_cluster_context_features(
                     df=df,
@@ -1909,7 +1885,7 @@ def get_context_feature(dataframe:pd.DataFrame,
                 )
         case 'sample_cluster_rank_percentile':
             if clustering_data is None:
-                logging.warning("Context feature sample_cluster_rank_percentile requested without clustering_data; skipping")
+                logger.warning("Context feature sample_cluster_rank_percentile requested without clustering_data; skipping")
             else:
                 df = get_sample_cluster_context_features(
                     df=df,
@@ -1920,7 +1896,7 @@ def get_context_feature(dataframe:pd.DataFrame,
                 )
         case 'sample_cluster_coverage':
             if clustering_data is None:
-                logging.warning("Context feature sample_cluster_coverage requested without clustering_data; skipping")
+                logger.warning("Context feature sample_cluster_coverage requested without clustering_data; skipping")
             else:
                 df = get_sample_cluster_context_features(
                     df=df,
@@ -1931,7 +1907,7 @@ def get_context_feature(dataframe:pd.DataFrame,
                 )
         case 'cluster_membership_onehot' | 'cluster_onehot' | 'cluster_id_onehot':
             if clustering_data is None:
-                logging.warning("Context feature cluster_membership_onehot requested without clustering_data; skipping")
+                logger.warning("Context feature cluster_membership_onehot requested without clustering_data; skipping")
             else:
                 df = get_cluster_membership_onehot_features(
                     df=df,
@@ -1939,7 +1915,7 @@ def get_context_feature(dataframe:pd.DataFrame,
                     column_prefix='cluster_membership',
                 )
         case _:
-            logging.info(f'Context feature {feature} not found and therefore ignored')
+            logger.debug(f'Context feature {feature} not found and therefore ignored')
     return df
     
 
@@ -1977,10 +1953,10 @@ def calculate_features(dataframe:pd.DataFrame,
 
     # If neither feature family is requested, return the current dataframe as-is.
     if not context_features and not intersection_features:
-        logging.info("No context or intersection features requested, skipping vip and clustering processing.")
+        logger.debug("No context or intersection features requested, skipping vip and clustering processing.")
         return df
     if isinstance(vips, int) and vips < 0:
-        logging.info(f"Ignoring negative VIP selector ({vips}); using no VIP references")
+        logger.debug(f"Ignoring negative VIP selector ({vips}); using no VIP references")
         vips = None
 
     if isinstance(vips, (str, int)):
@@ -1996,11 +1972,11 @@ def calculate_features(dataframe:pd.DataFrame,
                     chosen_list = list(vip_lists)[int(vips)]
                     vips = vip_lists[chosen_list]
                 else:
-                    logging.warning(f'VIP list key {vips} not found in vips.json')
+                    logger.warning(f'VIP list key {vips} not found in vips.json')
                     vips = None
-            logging.info(f'Loaded VIP reference set with {0 if vips is None else len(vips)} candidates')
+            logger.debug(f'Loaded VIP reference set with {0 if vips is None else len(vips)} candidates')
         except Exception as e:
-            logging.warning(f'Failed to resolve vip list {vips}: {e}')
+            logger.warning(f'Failed to resolve vip list {vips}: {e}')
             vips = None
 
     requested_context = {f.lower() for f in (context_features or []) if isinstance(f, str)}
@@ -2033,12 +2009,12 @@ def calculate_features(dataframe:pd.DataFrame,
                 clustering_cutoff=clustering_cutoff,
                 labels_path=cluster_labels_path,
             )
-            logging.info(
+            logger.debug(
                 f"Loaded clustering dataframe with {clustering_data['metadata']['n_rows']} assignments and "
                 f"{clustering_data['metadata']['n_clusters']} clusters"
             )
         except Exception as e:
-            logging.warning(f'Failed to load clustering artifacts: {e}')
+            logger.warning(f'Failed to load clustering artifacts: {e}')
             clustering_data = None
 
 
@@ -2108,7 +2084,7 @@ def transform_meta_features(dataframe,
                     drop_cells = True
                     dataframe.drop("Host", inplace=True, axis=1, errors='ignore')
                 else:
-                    logging.error(f'Missing Cells column in dataframe')
+                    logger.error(f'Missing Cells column in dataframe')
             case "Cells":
                 if "Cells" in dataframe.columns:
                     cell_to_simpler = {0:'unknown_celltype','':'unknown_celltype','human': 'unknown_celltype', 'WI38': 'Celltype_WI38', 'HEK293FT': 'Celltype_HEK293FT', 'A549': 'Celltype_A549', 'MDCK-SIAT1': 'Celltype_MDCK', 'MDCK': 'Celltype_MDCK', 'HBEpC': 'Celltype_HBEpC', 'Mouse': 'Host_mouse', 'MRC5': 'Celltype_MRC5'}
@@ -2119,7 +2095,7 @@ def transform_meta_features(dataframe,
                         meta_columns.append(cell)
                     drop_cells = True
                 else:
-                    logging.error(f'Missing Cells column in dataframe')
+                    logger.error(f'Missing Cells column in dataframe')
             case "Context":
                 #assert "Context" in dataframe.columns, 'Context column required in dataframe!'
                 if "Context" in dataframe.columns:
@@ -2128,7 +2104,7 @@ def transform_meta_features(dataframe,
                         meta_columns.append(value)
                     dataframe.drop(feature, inplace=True, axis=1)
                 else:
-                    logging.error(f'Missing Context column in dataframe')
+                    logger.error(f'Missing Context column in dataframe')
             case "Compartment":
                 #assert "Compartment" in dataframe.columns, 'Compartment column required in dataframe!'
                 if "Compartment" in dataframe.columns:
@@ -2137,7 +2113,7 @@ def transform_meta_features(dataframe,
                         meta_columns.append(value)
                     dataframe.drop(feature, inplace=True, axis=1)
                 else:
-                    logging.error(f'Missing Compartment column in dataframe')
+                    logger.error(f'Missing Compartment column in dataframe')
             case "Resolution":
                 #assert "Resolution" in dataframe.columns, 'Resolution column required in dataframe!'
                 if "Resolution" in dataframe.columns:
@@ -2146,7 +2122,7 @@ def transform_meta_features(dataframe,
                         meta_columns.append(value)
                     dataframe.drop(feature, inplace=True, axis=1)
                 else:
-                    logging.error(f'Missing Resolution column in dataframe')
+                    logger.error(f'Missing Resolution column in dataframe')
             case "Time":
                 #assert "Time" in dataframe.columns, 'Time column required in dataframe!'
                 if "Time" in dataframe.columns:
@@ -2167,21 +2143,21 @@ def transform_meta_features(dataframe,
                             try:
                                 return float(entry)
                             except Exception as e:
-                                logging.error(f'Time entry could not be translated to hpi!')
+                                logger.error(f'Time entry could not be translated to hpi!')
                     dataframe["Time"] = dataframe["Time"].map(translate_time)
                     meta_columns.append("Time")
                 else:
-                    logging.error(f'Missing Time column in dataframe')
+                    logger.error(f'Missing Time column in dataframe')
             case "MOI":
                 #assert "MOI" in dataframe.columns, 'MOI column required in dataframe!'
                 if "MOI" in dataframe.columns:
                     dataframe["MOI"] = dataframe["MOI"].transform(lambda x: x if isinstance(x, float) else 0 if x=='' else None if x is None else float(x))
                     meta_columns.append("MOI")
                 else:
-                    logging.error(f'Missing MOI column in dataframe')
+                    logger.error(f'Missing MOI column in dataframe')
             # case "Series": pass # TODO: if I ever add memory or other context values
             case _:
-                logging.error(f"Unknown meta-feature requested: {feature}")
+                logger.error(f"Unknown meta-feature requested: {feature}")
     if drop_cells:
         dataframe.drop("Cells", inplace=True, axis=1)
     if get_columns:
@@ -2193,27 +2169,24 @@ def drop_non_numeric(df: pd.DataFrame):
     Drops all duplicate and non-numerical columns from the dataframe.
 
     :param df: Dataframe to drop columns from
-
     :return: Dataframe with only numerical columns
     '''
-    df = df.loc[:, ~df.columns.duplicated()] # drop duplicate columns if any
+    df = df.loc[:, ~df.columns.duplicated()]
     weird_columns = []
     for col in df.columns:
         try:
             if isinstance(df[col].dtype, pd.StringDtype):
-                logging.debug(f'Dropping non-numeric column {col}: {df[col].iloc[0]}')
-                #logging.debug(f'Dropping non-numeric column {col}\n{list(df[col])}')
+                logger.debug(f'Dropping non-numeric column {col}: {df[col].iloc[0]}')
                 continue
             if not np.issubdtype(df[col].dtype, np.number):
-                logging.debug(f'Dropping non-numeric column {col}: {df[col].iloc[0]}')
-                #logging.debug(f'Dropping non-numeric column {col}\n{list(df[col])}')
+                logger.debug(f'Dropping non-numeric column {col}: {df[col].iloc[0]}')
         except Exception as e:
-            logging.error(f'Error checking column {col} with dtype {df[col].dtype}: {e}\n{traceback.format_exc()}')
+            logger.error(f'Error checking column {col} with dtype {df[col].dtype}: {e}\n{traceback.format_exc()}')
             weird_columns.append((col, df[col].dtype))
     if len(weird_columns)>0:
-        logging.error(f'Weird columns with unexpected behaviour: {weird_columns}')
+        logger.error(f'Weird columns with unexpected behaviour: {weird_columns}')
     df = df.select_dtypes(include=[np.number])
-    logging.debug(f'Columns left after dropping non-numeric columns:\n{list(df.columns)}')
+    logger.debug(f'Columns left after dropping non-numeric columns:\n{list(df.columns)}')
     return df
 
 def make_multiclass(df: pd.DataFrame, n_bins: int, y_column: str = 'NGS_log_norm', style: str = 'quantile', preset_thresholds=None):
@@ -2256,14 +2229,14 @@ def make_multiclass(df: pd.DataFrame, n_bins: int, y_column: str = 'NGS_log_norm
                     return j
         return n_bins-1
 
-    logging.debug(f'Labelling {y_column} into {n_bins} classes.')
+    logger.debug(f'Labelling {y_column} into {n_bins} classes.')
     labels = list(range(n_bins))
 
     if preset_thresholds is None:
         match style:
             case 'pd.cut':
                 y, thresholds = pd.cut(df[y_column], bins=n_bins, labels=labels, ordered=False, retbins=True)
-                logging.debug(f'Calculated pd.cut thresholds: {thresholds}')
+                logger.debug(f'Calculated pd.cut thresholds: {thresholds}')
             case 'quantile':
                 y = list()
                 thresholds = list()
@@ -2287,7 +2260,7 @@ def make_multiclass(df: pd.DataFrame, n_bins: int, y_column: str = 'NGS_log_norm
                         if i == n_bins-2:
                             y.append(labels[i+1])
                 y = pd.Series(y)'''
-                logging.debug(f'Calculated quantile thresholds: {thresholds}')
+                logger.debug(f'Calculated quantile thresholds: {thresholds}')
             case 'combined':
                 y = list()
                 thresholds = list()
@@ -2300,13 +2273,13 @@ def make_multiclass(df: pd.DataFrame, n_bins: int, y_column: str = 'NGS_log_norm
 
                 # label each row based on the calculated thresholds
                 y = df.apply(lambda row: label(row, thresholds), axis=1)
-                logging.debug(f'Calculated quantile thresholds: {thresholds}')
+                logger.debug(f'Calculated quantile thresholds: {thresholds}')
             case _:
-                logging.error(f'Unknown style {style} for labelling')
+                logger.error(f'Unknown style {style} for labelling')
                 y = None
                 thresholds = None
     else:
-        logging.debug(f'Using given thresholds: {preset_thresholds}')
+        logger.debug(f'Using given thresholds: {preset_thresholds}')
         assert isinstance(preset_thresholds, list), f'Given thresholds are not a list: {type(preset_thresholds)}'
         assert len(preset_thresholds) == n_bins-1, f'Given thresholds do not match the number of bins: {len(preset_thresholds)} != {n_bins-1}'
 
@@ -2324,7 +2297,7 @@ def make_multiclass(df: pd.DataFrame, n_bins: int, y_column: str = 'NGS_log_norm
                     y.append(labels[i+1])
         y = pd.Series(y)'''
 
-    logging.debug(f'Finished multiclass conversion:\n{list(y)}\n{list(thresholds)}')
+    logger.debug(f'Finished multiclass conversion:\n{list(y)}\n{list(thresholds)}')
     return y, thresholds
 
 def stratified_undersample(df: pd.DataFrame, target_col: str = 'NGS_log_norm',
@@ -2366,10 +2339,10 @@ def get_duplicates(df):
     :return: List of duplicates
     '''
     duplicates = df.groupby(["Segment","Start","End"])
-    logging.info(f'Found {duplicates.ngroups} groupings of Segment x Start x End in dataframe')
+    logger.debug(f'Found {duplicates.ngroups} groupings of Segment x Start x End in dataframe')
     duplicates = duplicates.filter(lambda x: len(x) > 1)
     duplicates = duplicates.groupby(["Segment","Start","End"])
-    logging.info(f'Found {duplicates.ngroups} groupings with multiple occurences in the dataframe')
+    logger.debug(f'Found {duplicates.ngroups} groupings with multiple occurences in the dataframe')
     return duplicates
 
 def merge_duplicates(df):
@@ -2394,7 +2367,7 @@ def find_k_varying(df, k, y_column, metric = 'std'):
 
     :return: List of k DelVG IDs
     '''
-    logging.debug(f'Finding k-varying candidates')
+    logger.debug(f'Finding k-varying candidates')
     if "ID" not in df.columns:
         assert "Strain" in df.columns, "Strain column not found in dataframe"
         assert "Segment" in df.columns, "Segment column not found in dataframe"
@@ -2407,43 +2380,43 @@ def find_k_varying(df, k, y_column, metric = 'std'):
             grouped_filtered = df.groupby("ID").filter(lambda x: len(x) > 1)
             grouped = grouped_filtered.groupby("ID")[y_column].agg(['min', 'max']).reset_index()
             grouped['diff'] = grouped['max'] - grouped['min']
-            logging.debug(f'Range grouping:\n{grouped}')
+            logger.debug(f'Range grouping:\n{grouped}')
             top_ids = grouped.nlargest(k, 'diff')['ID'].to_list()
             top_k = df[df['ID'].isin(top_ids)]['ID'].unique()
-            logging.debug(f'Top K: {list(top_k)}')
+            logger.debug(f'Top K: {list(top_k)}')
             return top_k
         case 'cv':
             grouped_filtered = df.groupby("ID").filter(lambda x: len(x) > 1)
             grouped = grouped_filtered.groupby("ID")[y_column].agg(['std', 'mean']).reset_index()
             grouped = grouped[grouped["mean"]>0] # Should not be necessary, but just in case ensure we don't divide by 0
             grouped["cv"] = grouped["std"]/grouped["mean"]
-            logging.debug(f'Coefficient of variation grouping:\n{grouped}')
+            logger.debug(f'Coefficient of variation grouping:\n{grouped}')
             top_ids = grouped.nlargest(k, 'cv')['ID'].to_list()
             top_k = df[df['ID'].isin(top_ids)]['ID'].unique()
-            logging.debug(f'Top K: {list(top_k)}')
+            logger.debug(f'Top K: {list(top_k)}')
             return top_k
         case 'std':
             grouped_filtered = df.groupby("ID").filter(lambda x: len(x) > 1)
             grouped = grouped_filtered.groupby("ID")[y_column].std().reset_index(name='std')
-            logging.debug(f'Standard Deviation grouping:\n{grouped}')
+            logger.debug(f'Standard Deviation grouping:\n{grouped}')
             top_ids = grouped.nlargest(k, 'std')['ID'].to_list()
             top_k = df[df['ID'].isin(top_ids)]['ID'].unique()
-            logging.debug(f'Top K: {list(top_k)}')
+            logger.debug(f'Top K: {list(top_k)}')
             return top_k
         case 'count':
             grouped_filtered = df.groupby("ID").filter(lambda x: len(x) > 1)
             grouped = grouped_filtered.groupby("ID")[y_column].count().reset_index(name='count')
-            logging.debug(f'Count grouping:\n{grouped}')
+            logger.debug(f'Count grouping:\n{grouped}')
             top_ids = grouped.nlargest(k, 'count')['ID'].to_list()
             top_k = df[df['ID'].isin(top_ids)]['ID'].unique()
-            logging.debug(f'Top K: {list(top_k)}')
+            logger.debug(f'Top K: {list(top_k)}')
             return top_k
         case 'count_cv':
             grouped_filtered = df.groupby("ID").filter(lambda x: len(x) > 1)
             grouped = grouped_filtered.groupby("ID")[y_column].agg(['std', 'mean', 'count']).reset_index()
             grouped = grouped[grouped["mean"]>0] # Should not be necessary, but just in case ensure we don't divide by 0
             grouped["cv"] = grouped["std"]/grouped["mean"]
-            logging.debug(f'Count grouping:\n{grouped}')
+            logger.debug(f'Count grouping:\n{grouped}')
             rest_k = k
             top_ids = []
             count_groups = grouped.groupby(["count"])
@@ -2459,7 +2432,7 @@ def find_k_varying(df, k, y_column, metric = 'std'):
                     top_ids += group.nlargest(rest_k, 'count')['ID'].to_list()
                     break
             top_k = df[df['ID'].isin(top_ids)]['ID'].unique()
-            logging.debug(f'Top K: {list(top_k)}')
+            logger.debug(f'Top K: {list(top_k)}')
             return top_k
         case 'zscore':
             if "ACC_num" in df.columns:
@@ -2467,7 +2440,7 @@ def find_k_varying(df, k, y_column, metric = 'std'):
             elif "Publication" in df.columns and df["Publication"].nunique()>1:
                 exp_col = "Publication"
             else:
-                logging.error(f'Did not find useful experiment column to calculate z-scores.')
+                logger.error(f'Did not find useful experiment column to calculate z-scores.')
                 return []
             grouped_filtered = df.groupby("ID").filter(lambda x: len(x) > 1)
             stats = df.groupby(exp_col)[y_column].agg(["mean","std"]).reset_index()
@@ -2475,13 +2448,13 @@ def find_k_varying(df, k, y_column, metric = 'std'):
             tmp_df = df.merge(stats, on=exp_col, how='left')
             tmp_df["z_score"] = (tmp_df[y_column]-tmp_df["bg_mean"])/tmp_df["bg_std"]
             z_agg = tmp_df.groupby("ID")["z_score"].agg(['mean', 'max', 'count']).reset_index()
-            logging.debug(f'Aggregated z-score results:\n{z_agg}')
+            logger.debug(f'Aggregated z-score results:\n{z_agg}')
             top_ids = z_agg.nlargest(k, "mean")['ID'].to_list()
             top_k = df[df['ID'].isin(top_ids)]['ID'].unique()
-            logging.debug(f'Top K: {list(top_k)}')
+            logger.debug(f'Top K: {list(top_k)}')
             return top_k
         case _:
-            logging.error(f'Unknown metric {metric} for variance calculation')
+            logger.error(f'Unknown metric {metric} for variance calculation')
             return None
     return None
 
@@ -2497,9 +2470,9 @@ def get_k_varying(df, candidates, y_column, experiment_col):
 
     :return: List of k DelVG IDs
     '''
-    logging.debug(f'Getting k-varying candidate values')
+    logger.debug(f'Getting k-varying candidate values')
     if "ID" not in df.columns:
-        #logging.debug('adding ID to columns')
+        #logger.debug('adding ID to columns')
         assert "Strain" in df.columns, "Strain column not found in dataframe"
         assert "Segment" in df.columns, "Segment column not found in dataframe"
         assert "Start" in df.columns, "Start column not found in dataframe"
@@ -2530,12 +2503,12 @@ def get_k_varying(df, candidates, y_column, experiment_col):
 
     for i in candidates:
         df = find_local_by_col(df,y_column, i)
-        logging.debug(f'Candidate {i}:\n{df["k_vary_"+i].head()}\n{df["k_vary_"+i].describe()}')
+        logger.debug(f'Candidate {i}:\n{df["k_vary_"+i].head()}\n{df["k_vary_"+i].describe()}')
     #for i in candidates:
     #    df['k_vary_'+i] = 0
     #    df['k_vary_'+i] = df.apply(lambda row: find_local_candidate(df[df[experiment_col]==row[experiment_col]], y_column, i), axis=1)
     
-    logging.debug(f'Finished getting {len(candidates)} k-varying candidates based on {experiment_col}\n\n')
+    logger.debug(f'Finished getting {len(candidates)} k-varying candidates based on {experiment_col}\n\n')
     return df
 
 def get_current_values(df, candidates, y_column, experiment_col):
@@ -2550,9 +2523,9 @@ def get_current_values(df, candidates, y_column, experiment_col):
 
     :return: List of k DelVG IDs
     '''
-    logging.debug(f'Getting k-varying candidate values')
+    logger.debug(f'Getting k-varying candidate values')
     if "ID" not in df.columns:
-        #logging.debug('adding ID to columns')
+        #logger.debug('adding ID to columns')
         assert "Strain" in df.columns, "Strain column not found in dataframe"
         assert "Segment" in df.columns, "Segment column not found in dataframe"
         assert "Start" in df.columns, "Start column not found in dataframe"
@@ -2583,12 +2556,12 @@ def get_current_values(df, candidates, y_column, experiment_col):
 
     for i in candidates:
         df = find_local_by_col(df,y_column, i)
-        logging.debug(f'Candidate {i}:\n{df["k_vary_"+i].head()}\n{df["k_vary_"+i].describe()}')
+        logger.debug(f'Candidate {i}:\n{df["k_vary_"+i].head()}\n{df["k_vary_"+i].describe()}')
     #for i in candidates:
     #    df['k_vary_'+i] = 0
     #    df['k_vary_'+i] = df.apply(lambda row: find_local_candidate(df[df[experiment_col]==row[experiment_col]], y_column, i), axis=1)
     
-    logging.debug(f'Finished getting {len(candidates)} k-varying candidates based on {experiment_col}\n\n')
+    logger.debug(f'Finished getting {len(candidates)} k-varying candidates based on {experiment_col}\n\n')
     return df
 
 def get_last_values(df, candidates, y_column, experiment_col):
@@ -2604,9 +2577,9 @@ def get_last_values(df, candidates, y_column, experiment_col):
     :return: List of k DelVG IDs
     '''
     # TODO: Make this get the last known value of candidates by time, rather than value in current experiment
-    logging.debug(f'Getting k-varying candidate values')
+    logger.debug(f'Getting k-varying candidate values')
     if "ID" not in df.columns:
-        #logging.debug('adding ID to columns')
+        #logger.debug('adding ID to columns')
         assert "Strain" in df.columns, "Strain column not found in dataframe"
         assert "Segment" in df.columns, "Segment column not found in dataframe"
         assert "Start" in df.columns, "Start column not found in dataframe"
@@ -2637,12 +2610,12 @@ def get_last_values(df, candidates, y_column, experiment_col):
 
     for i in candidates:
         df = find_local_by_col(df,y_column, i)
-        logging.debug(f'Candidate {i}:\n{df["k_vary_"+i].head()}\n{df["k_vary_"+i].describe()}')
+        logger.debug(f'Candidate {i}:\n{df["k_vary_"+i].head()}\n{df["k_vary_"+i].describe()}')
     #for i in candidates:
     #    df['k_vary_'+i] = 0
     #    df['k_vary_'+i] = df.apply(lambda row: find_local_candidate(df[df[experiment_col]==row[experiment_col]], y_column, i), axis=1)
     
-    logging.debug(f'Finished getting {len(candidates)} k-varying candidates based on {experiment_col}\n\n')
+    logger.debug(f'Finished getting {len(candidates)} k-varying candidates based on {experiment_col}\n\n')
     return df
 
 def get_fuzzy_locations(df): # not looking into this anymore
@@ -2662,14 +2635,14 @@ def apply_cutoff(df, cutoff, method = 'quick_alternative', exp_col='', forced_de
 
     :return: Dataframe with the cutoff applied and no doubled DelVGs
     '''
-    logging.warning(f'This function is deprecated.{"" if forced_depr else " Switching to cutoff_clean()."}')
+    #logger.warning(f'This function is deprecated.{"" if forced_depr else " Switching to cutoff_clean()."}')
     if not forced_depr:
         return cutoff_clean(data=df, threshold=cutoff, method=method if method=="basic" else "accumulated",
                             dataset_id_column="dataset_id" if exp_col=="dataset_id" else "Publication",
                             inplace=False)
-    logging.info(f'Applying cutoff of {cutoff} to the dataframe, using {method.replace("_"," ")} method.')
-    logging.debug(f'pd.options.mode.chained_assignment = None')
-    logging.debug(f'Columns before cutoff {list(df.columns)}')
+    logger.debug(f'Applying cutoff of {cutoff} to the dataframe, using {method.replace("_"," ")} method.')
+    logger.debug(f'pd.options.mode.chained_assignment = None')
+    logger.debug(f'Columns before cutoff {list(df.columns)}')
     identifier = ["Strain", "Segment", "Start", "End"]
     assert all([x in df.columns for x in identifier]), "No identifier found in dataframe"
     if exp_col != '':
@@ -2684,13 +2657,13 @@ def apply_cutoff(df, cutoff, method = 'quick_alternative', exp_col='', forced_de
     match method:
         case 'basic':
             df = df.groupby(identifier, as_index=False).sum(['NGS_read_count'])
-            logging.debug(f'During Cutoff:\n{list(df.columns)}')
+            logger.debug(f'During Cutoff:\n{list(df.columns)}')
             df = df[df['NGS_read_count'] >= cutoff]
-            logging.info(f'Pooled NGS_read_count values and applied {method} cutoff of {cutoff} to the dataframe. {df.shape[0]} rows left {df.shape[1]} columns left.')
+            logger.debug(f'Pooled NGS_read_count values and applied {method} cutoff of {cutoff} to the dataframe. {df.shape[0]} rows left {df.shape[1]} columns left.')
         case 'individual':
             df = df[df['NGS_read_count'] >= cutoff]
-            logging.info(f'Applied {method} cutoff of {cutoff} to the dataframe. {df.shape[0]} rows left.')
-            logging.info(f'Pooling NGS_read_count values')
+            logger.debug(f'Applied {method} cutoff of {cutoff} to the dataframe. {df.shape[0]} rows left.')
+            logger.debug(f'Pooling NGS_read_count values')
             df = df.groupby(identifier, as_index=False).sum(['NGS_read_count'])
         case 'combined':
             grouped = df.groupby(identifier, as_index=False).sum(['NGS_read_count']).reset_index()
@@ -2700,18 +2673,18 @@ def apply_cutoff(df, cutoff, method = 'quick_alternative', exp_col='', forced_de
                     #df = df.drop(group.index)
                     to_drop.extend(group.index)
             df = df.drop(to_drop)
-            logging.info(f'Applied {method} cutoff of {cutoff} to the dataframe. {df.shape[0]} rows left.')
-            logging.info(f'Pooling NGS_read_count values')
+            logger.debug(f'Applied {method} cutoff of {cutoff} to the dataframe. {df.shape[0]} rows left.')
+            logger.debug(f'Pooling NGS_read_count values')
             df = df.groupby(identifier, as_index=False).sum(['NGS_read_count'])
         case 'quick_alternative':
             if "Wang2020" in df["Publication"].unique() and "ACC_num" in df.columns:
                 # Wang2020 has some annoying bits in unpooled version.
                 # TODO: Need to ask Jens what he did about that.
-                logging.info(f'Found unpooled Wang2020, so dropping doubled ACC_num+ID cols, only keeping max NGS')
+                logger.debug(f'Found unpooled Wang2020, so dropping doubled ACC_num+ID cols, only keeping max NGS')
                 max_ids = df.groupby(["ACC_num","Strain","Segment","Start","End"])["NGS_read_count"].idxmax()
                 df = df.loc[max_ids].reset_index(drop=True)
             # TODO: Standardise this and add pooling option
-            logging.debug(f'Applying quick alternative cutoff without pooling')
+            logger.debug(f'Applying quick alternative cutoff without pooling')
             df = identify_candidates(df)
             survivors = df[df["NGS_read_count"]>=cutoff]["ID"]
             df = df[df["ID"].isin(survivors)]
@@ -2724,13 +2697,13 @@ def apply_cutoff(df, cutoff, method = 'quick_alternative', exp_col='', forced_de
                 try:
                     df = pd.concat(pub_dfs)
                 except ValueError as e:
-                    logging.debug(f'ValueError during concatenation in cutoff: {e}')
+                    logger.debug(f'ValueError during concatenation in cutoff: {e}')
                 except Exception as e:
-                    logging.error(f'Problem during cutoff application:\n{e}\n{df.head()}\n{df.describe()}\n{pub_dfs}\n{df["Publication"].nunique()}')
+                    logger.error(f'Problem during cutoff application:\n{e}\n{df.head()}\n{df.describe()}\n{pub_dfs}\n{df["Publication"].nunique()}')
         case _:
-            logging.error(f'Unknown type {method} for cutoff application')
+            logger.error(f'Unknown type {method} for cutoff application')
     df.reset_index(drop=True, inplace=True)
-    logging.debug(f'Columns after cutoff {list(df.columns)}')
+    logger.debug(f'Columns after cutoff {list(df.columns)}')
     return df
 
 def cutoff_clean(data, threshold:int=None, method="accumulated", y_column="NGS_read_count", dataset_id_column="Publication", minimum_dataset_size=40, inplace=False, fix_wang=True, cutoff:int=None, left_out_ids: list = None):
@@ -2753,7 +2726,7 @@ def cutoff_clean(data, threshold:int=None, method="accumulated", y_column="NGS_r
 
     :return: Dataframe with the cutoff applied and no doubled DelVGs
     '''
-    logging.info(f'Applying cutoff {threshold} to {y_column} using {method} method.')
+    logger.debug(f'Applying cutoff {threshold} to {y_column} using {method} method.')
     if inplace:
         dataframe = data
     else:
@@ -2762,7 +2735,7 @@ def cutoff_clean(data, threshold:int=None, method="accumulated", y_column="NGS_r
         if cutoff is None:
             raise ValueError(f'Not threshold provided for cutoff application.')
         threshold = cutoff
-        logging.warning(f'Using deprecated cutoff parameter for threshold value. Please switch to threshold parameter in future calls.')
+        logger.warning(f'Using deprecated cutoff parameter for threshold value. Please switch to threshold parameter in future calls.')
     dataframe = identify_candidates(dataframe)
     if fix_wang:
         dataframe = fix_unpooled_wang2020(dataframe)
@@ -2779,10 +2752,10 @@ def cutoff_clean(data, threshold:int=None, method="accumulated", y_column="NGS_r
                         to_keep.extend(dvg_entries.index)
             dataframe = dataframe.loc[to_keep]
         case _:
-            logging.error(f'Unknown method for application of cutoff: {method}')
+            logger.error(f'Unknown method for application of cutoff: {method}')
     for dataset, dataset_entries in dataframe.groupby(dataset_id_column):
         if minimum_dataset_size > 0 and dataset_entries["ID"].nunique() < minimum_dataset_size:
-            logging.warning(f'Dataset {dataset} has only {dataset_entries["ID"].nunique()} unique DVGs after cutoff application, which is below the minimum of {minimum_dataset_size}. Removing all entries of this dataset.')
+            logger.warning(f'Dataset {dataset} has only {dataset_entries["ID"].nunique()} unique DVGs after cutoff application, which is below the minimum of {minimum_dataset_size}. Removing all entries of this dataset.')
             dataframe = dataframe[dataframe[dataset_id_column]!=dataset]
     if not inplace:
         return dataframe
@@ -2794,83 +2767,13 @@ def fix_unpooled_wang2020(data, inplace=False):
         dataframe = data.copy()
     dataframe = identify_candidates(dataframe)
     if "ACC_num" in dataframe.columns and dataframe.duplicated(["ACC_num","ID"]).any():
-        logging.debug(f'Found duplicate ACC_num/ID entries. Aggregating NGS read counts to remove duplicates.')
+        logger.debug(f'Found duplicate ACC_num/ID entries. Aggregating NGS read counts to remove duplicates.')
         behavior = {col: "first" for col in dataframe.columns}
         behavior["NGS_read_count"] = "sum"
         dataframe = dataframe.groupby(["Publication","ACC_num","ID"], as_index=False).agg(behavior).reset_index(drop=True)
         dataframe = dataframe.fillna(np.nan) # resetting na values
     if not inplace:
         return dataframe
-
-'''
-def apply_cutoff(df, cutoff, method = 'basic', exp_col=''):
-    ''''''
-    Applies a cutoff to the dataframe. Has different methods of application, depending on the method parameter. Pools
-    leftover rows of the same DelVG.
-    basic: Pools all rows of each DelVG and removes any with a summed y_column value below the cutoff.
-    individual: Removes any row with a y_column value below the cutoff.
-    combined: Pools all rows of each DelVG that reaches the cutoff with at least one of its occurences. Removes the rest.
-
-    :param df: Dataframe to apply the cutoff to
-    :param cutoff: Minimum value to keep a row
-    :param method: Name of cutoff application (Options: basic, individual, combined)
-
-    :return: Dataframe with the cutoff applied and no doubled DelVGs'''
-'''
-    logging.info(f'Applying cutoff of {cutoff} to the dataframe.')
-    logging.debug(f'pd.options.mode.chained_assignment = None')
-    logging.debug(f'Columns before cutoff {list(df.columns)}')
-    identifier = ["Strain", "Segment", "Start", "End"]
-    assert all([x in df.columns for x in identifier]), "No identifier found in dataframe"
-    if exp_col != '':
-        assert exp_col in df.columns, "Experiment Column is not in dataframe"
-        identifier.append(exp_col)
-    if "ID" in df.columns:
-        identifier.append("ID")
-    if "Publication" in df.columns and exp_col != "Publication":
-        identifier.append("Publication")
-
-    # TODO: Removes most cols not part of [identifier, NGS_read_count]. Should find better way than adding all to identifier.
-    match method:
-        case 'basic':
-            df = df.groupby(identifier, as_index=False).sum(['NGS_read_count'])
-            logging.debug(f'During Cutoff:\n{list(df.columns)}')
-            df = df[df['NGS_read_count'] >= cutoff]
-            logging.info(f'Pooled NGS_read_count values and applied {method} cutoff of {cutoff} to the dataframe. {df.shape[0]} rows left {df.shape[1]} columns left.')
-        case 'individual':
-            df = df[df['NGS_read_count'] >= cutoff]
-            logging.info(f'Applied {method} cutoff of {cutoff} to the dataframe. {df.shape[0]} rows left.')
-            logging.info(f'Pooling NGS_read_count values')
-            df = df.groupby(identifier, as_index=False).sum(['NGS_read_count'])
-        case 'combined':
-            grouped = df.groupby(identifier, as_index=False).sum(['NGS_read_count']).reset_index()
-            to_drop = []
-            for name, group in grouped:
-                if not (group['NGS_read_count'] >= cutoff).any():
-                    #df = df.drop(group.index)
-                    to_drop.extend(group.index)
-            df = df.drop(to_drop)
-            logging.info(f'Applied {method} cutoff of {cutoff} to the dataframe. {df.shape[0]} rows left.')
-            logging.info(f'Pooling NGS_read_count values')
-            df = df.groupby(identifier, as_index=False).sum(['NGS_read_count'])
-        case 'quick_alternative':
-            # TODO: Standardise this and add pooling option
-            logging.info(f'Applying quick alternative cutoff without pooling')
-            df = identify_candidates(df)
-            survivors = df[df["NGS_read_count"]>=cutoff]["ID"]
-            df = df[df["ID"].isin(survivors)]
-            if "Publication" in df.columns:
-                pub_dfs = []
-                for pub in df["Publication"].unique():
-                    pub_df = df[df["Publication"]==pub]
-                    pub_survivors = pub_df[pub_df["NGS_read_count"]>=cutoff]["ID"]
-                    pub_dfs.append(pub_df[pub_df["ID"].isin(pub_survivors)])
-                df = pd.concat(pub_dfs)
-        case _:
-            logging.error(f'Unknown type {method} for cutoff application')
-    df.reset_index(drop=True, inplace=True)
-    logging.debug(f'Columns after cutoff {list(df.columns)}')
-    return df'''
 
 def identify_candidates(df):
     '''
@@ -2879,13 +2782,13 @@ def identify_candidates(df):
     :return: pandas dataframe with additional column ID
     '''
     if 'ID' not in df.columns:
-        logging.info("Identifying candidates of dataframe")
+        logger.debug("Identifying candidates of dataframe")
         df["ID"] = df["Strain"] + "_" + df["Segment"] + "_" + df["Start"].astype(str) + "_" + df["End"].astype(str)
         #df['ID'] = df.apply(lambda row: str(row['Strain']) + '_' + str(row['Segment']) + '_' + str(row['Start']) + '_' + str(row['End']), axis=1)
     return df
 
 def count_intersections(df, exp_col):
-    logging.info('Counting intersections')
+    logger.debug('Counting intersections')
     df = identify_candidates(df)
     grouped = df.groupby('ID')
     df['Intersections'] = 0
@@ -2895,7 +2798,7 @@ def count_intersections(df, exp_col):
     return df
 
 def calculate_target(df, y_col, exp_col='Publication', drop_read_count=True):
-    logging.info('Calculating target Column')
+    logger.debug('Calculating target Column')
     if y_col != 'NGS_read_count':
         if 'inter' in y_col.lower():
             # Only on publications
@@ -2906,7 +2809,7 @@ def calculate_target(df, y_col, exp_col='Publication', drop_read_count=True):
             df = central_log_ratio_transform(df, exp_col, drop_read_count=drop_read_count)
         if 'ilr' in y_col.lower():
             df = isometric_log_ratio_transform(df, exp_col, drop_read_count=drop_read_count)
-    logging.debug(f'After calculating target column:\n{list(df.columns)}\n{df.dtypes}\n{df.head()}')
+    logger.debug(f'After calculating target column:\n{list(df.columns)}\n{df.dtypes}\n{df.head()}')
     return df
 
 def central_log_ratio_transform(data, exp_col, ratio=False, drop_read_count=True, inplace=False):
@@ -2998,7 +2901,7 @@ def split_data(df, y, test_size=0.2, seed=42, thresh=0.1, stratified=False, exp_
     Splits the dataframe and label column up into train and test sets. If stratified, the split will create the
     same ratio of each Publication in both train and test set.
     '''
-    logging.info(f'df:\n{df.head()}\ny:\n{y.head()}\n{y.value_counts()}')
+    logger.debug(f'df:\n{df.head()}\ny:\n{y.head()}\n{y.value_counts()}')
     if not stratified:
         if strat_id:
             # Ensure that same ID is only in either train or test set, but never in both
@@ -3028,7 +2931,7 @@ def split_data(df, y, test_size=0.2, seed=42, thresh=0.1, stratified=False, exp_
             overlap = [x for x in range(len(train_idx_bool)) if train_idx_bool[x]==test_idx_bool[x]]
             if len(overlap):
                 print(f'ID crossover between train and test set!\n{overlap}')
-                logging.error(f'ID crossover between train and test set!\n{overlap}')
+                logger.error(f'ID crossover between train and test set!\n{overlap}')
             
             X_train = df[train_idx_bool].reset_index(drop=True)
             X_test = df[test_idx_bool].reset_index(drop=True)
@@ -3066,7 +2969,7 @@ def split_data(df, y, test_size=0.2, seed=42, thresh=0.1, stratified=False, exp_
         overlap = [x for x in range(len(train_idx_bool)) if train_idx_bool[x]==test_idx_bool[x]]
         if len(overlap):
             print(f'ID crossover between train and test set!\n{overlap}')
-            logging.error(f'ID crossover between train and test set!\n{overlap}')
+            logger.error(f'ID crossover between train and test set!\n{overlap}')
         
         X_train = df[train_idx_bool].reset_index(drop=True)
         X_test = df[test_idx_bool].reset_index(drop=True)
@@ -3096,13 +2999,13 @@ def balance_dataset(df, y_col, target_ratio=0, seed=42):
     '''
     Balances binary classes of the dataframe. If target_ratio is given, reduces one subset to achieve larger_set/smaller_set = target_ratio.
     '''
-    logging.debug(f'Balancing Dataframe\n{df.head()}')
+    logger.debug(f'Balancing Dataframe\n{df.head()}')
     if y_col == "Intersections":
         start_dist = (len(df[df[y_col]==0]),len(df[df[y_col]>0]))
         # If target_ratio given, rebalance according to it
         if target_ratio != 0:
             if min(start_dist)/max(start_dist) == target_ratio or max(start_dist)/min(start_dist) == target_ratio:
-                logging.info(f'Dataframe already balanced according to target ratio')
+                logger.debug(f'Dataframe already balanced according to target ratio')
                 return df
             target_max = min(start_dist)*target_ratio
             if target_max > max(start_dist):
@@ -3123,7 +3026,7 @@ def balance_dataset(df, y_col, target_ratio=0, seed=42):
                     sample = df[df[y_col]>0].sample(n=removal_amount,random_state=seed)
             df = df.drop(sample.index)
             end_dist = (len(df[df[y_col]==0]),len(df[df[y_col]>0]))
-            logging.info(f'Balanced dataframe on Intersection counts by removing {removal_amount} rows:\nStarting ratio: {start_dist[0]} vs. {start_dist[1]}\nFinal ratio: {end_dist[0]} vs. {end_dist[1]}')
+            logger.debug(f'Balanced dataframe on Intersection counts by removing {removal_amount} rows:\nStarting ratio: {start_dist[0]} vs. {start_dist[1]}\nFinal ratio: {end_dist[0]} vs. {end_dist[1]}')
             
         # Otherwise check if dataframe is unbalanced
         elif min(start_dist)/max(start_dist)>0.2 and min(start_dist)/max(start_dist)<0.8:
@@ -3135,9 +3038,9 @@ def balance_dataset(df, y_col, target_ratio=0, seed=42):
                 sample = df[df[y_col]>0].sample(n=removal_amount,random_state=seed)
             df = df.drop(sample.index)
             end_dist = (len(df[df[y_col]==0]),len(df[df[y_col]>0]))
-            logging.info(f'Balanced dataframe on Intersection counts by removing {removal_amount} rows:\nStarting ratio: {start_dist[0]} vs. {start_dist[1]}\nFinal ratio: {end_dist[0]} vs. {end_dist[1]}')
+            logger.debug(f'Balanced dataframe on Intersection counts by removing {removal_amount} rows:\nStarting ratio: {start_dist[0]} vs. {start_dist[1]}\nFinal ratio: {end_dist[0]} vs. {end_dist[1]}')
         else:
-            logging.info(f'No target ratio given and Dataframe is already balanced well enough: {start_dist}')
+            logger.debug(f'No target ratio given and Dataframe is already balanced well enough: {start_dist}')
     df = df.reset_index(drop=True)
     return df
 
@@ -3153,25 +3056,3 @@ def find_cutoff(df: pd.DataFrame) -> pd.DataFrame:
     df = identify_candidates(df)
     df["max_cutoff"] = df.groupby(["Publication", "ID"])["NGS_read_count"].transform("max")
     return df
-
-
-
-
-'''
-case 'quick_alternative':
-    # TODO: Standardise this and add pooling option
-    logging.debug(f'Applying quick alternative cutoff without pooling')
-    df = identify_candidates(df)
-    survivors = df[df["NGS_read_count"]>=cutoff]["ID"]
-    df = df[df["ID"].isin(survivors)]
-    if "Publication" in df.columns:
-        pub_dfs = []
-        for pub in df["Publication"].unique():
-            pub_df = df[df["Publication"]==pub]
-            pub_survivors = pub_df[pub_df["NGS_read_count"]>=cutoff]["ID"]
-            pub_dfs.append(pub_df[pub_df["ID"].isin(pub_survivors)])
-        try:
-            df = pd.concat(pub_dfs)
-        except Exception as e:
-            logging.error(f'Problem during cutoff application:\n{e}\n{df.head()}\n{df.describe()}\n{pub_dfs}\n{df["Publication"].nunique()}')
-            '''
