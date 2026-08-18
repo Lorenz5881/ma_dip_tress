@@ -118,7 +118,7 @@ done
 
 wait # Wait for all leave-one-out model checks to finish before starting single-dataset checks (42 jobs submitted)
 
-######## Miscellaneous NGS prediction testing with context features########
+######## Miscellaneous NGS prediction testing with context features ########
 # looping over publication IDs 1-7 for A/PuertoRico/8/1934
 # leave-one-out benchmark on pooled data
 #echo "Running model check benchmark dropped inter leave-one-out on pooled..."

@@ -1,0 +1,89 @@
+{
+  "Alnaji2019": {
+    "SRA_ID": "PRJNA527853",
+    "SRA_link": "https://www.ncbi.nlm.nih.gov/sra/PRJNA527853",
+    "Datasets": {
+      "Cal07": {
+        "Sample_IDs": [
+          "SRR8754522",
+          "SRR8754523",
+          "SRR8754531",
+          "SRR8754532",
+          "SRR8754533"
+        ],
+        "Type": "A",
+        "Strain": "A_California_07_2009",
+        "Host_Cell": "MDCK",
+        "In_Vitro": true,
+        "RNA_Source": "extracellular",
+        "Sequencing_Type": "bulk",
+        "Multi-Timepoint": true,
+        "MOI": "unknown",
+        "Cutoff": 13
+      },
+      "NC": {
+        "Sample_IDs": [
+          "SRR8754513",
+          "SRR8754514",
+          "SRR8754527",
+          "SRR8754538"
+        ],
+        "Type": "A",
+        "Strain": "A_NewCaledonia_20-JY2_1999",
+        "Host_Cell": "MDCK",
+        "In_Vitro": true,
+        "RNA_Source": "extracellular",
+        "Sequencing_Type": "bulk",
+        "Multi-Timepoint": true,
+        "MOI": "unknown",
+        "Cutoff": 9
+      },
+      "Perth": {
+        "Sample_IDs": [
+          "SRR8754517",
+          "SRR8754524",
+          "SRR8754525",
+          "SRR8754526"
+        ],
+        "Type": "A",
+        "Strain": "A_Perth_16_2009",
+        "Host_Cell": "MDCK",
+        "In_Vitro": true,
+        "RNA_Source": "extracellular",
+        "Sequencing_Type": "bulk",
+        "Multi-Timepoint": true,
+        "MOI": "unknown",
+        "Cutoff": 12
+      },
+      "BLee": {
+        "Sample_IDs": [
+          "SRR8754507",
+          "SRR8754508",
+          "SRR8754509",
+          "SRR8754516"
+        ],
+        "Type": "B",
+        "Strain": "B_Lee_1940",
+        "Host_Cell": "MDCK",
+        "In_Vitro": true,
+        "RNA_Source": "extracellular",
+        "Sequencing_Type": "bulk",
+        "Multi-Timepoint": true,
+        "MOI": "unknown",
+        "Cutoff": 15
+      }
+    }
+  },
+  "Kupke2020": {
+    "SRA_ID": "PRJNA590388",
+    "SRA_link": "https://www.ncbi.nlm.nih.gov/sra/PRJNA590388",
+    "Datasets": {
+      "Intra": {
+        "Sample_IDs": []
+      },
+      "Extra": {
+
+      }
+    }
+  }
+}

@@ -51,15 +51,12 @@ MULTI_PUB_STRAINS = list(STRAIN_WISE_PUBLICATIONS.keys())
 # colors for standardized visualizations
 colorblind_type = None
 STRAIN_COLORS = {strain: color for strain, color in zip(STRAINS, distinctipy.get_colors(STRAINS_COUNT, n_attempts=5000, pastel_factor=0.2, colorblind_type=colorblind_type, rng=42))}
-SEGMENT_COLORS = {segment: color for segment, color in zip(SEGMENTS, sns.color_palette("Set2", len(SEGMENTS)))}#{segment: color for segment, color in zip(SEGMENTS, distinctipy.get_colors(SEGMENTS_COUNT, n_attempts=5000, pastel_factor=0.2, colorblind_type=colorblind_type, rng=42))}
+SEGMENT_COLORS = {segment: color for segment, color in zip(SEGMENTS, sns.color_palette("Set2", len(SEGMENTS)))}
 STRAIN_WISE_PUB_COLORS = {strain: {pub: color for pub, color in zip(pubs, sns.color_palette("Accent", len(pubs)))} for strain, pubs in STRAIN_WISE_PUBLICATIONS.items()}
-#{strain: {pub: color for pub, color in zip(pubs, distinctipy.get_colors(len(pubs), n_attempts=5000, pastel_factor=0.2, colorblind_type=colorblind_type, rng=42))} for strain, pubs in STRAIN_WISE_PUBLICATIONS.items()}
 
-# take looger from main
+# take logger from main
 logger = logging.getLogger(__name__)
 logger.debug(f'Loaded influenza_info.json:\n{influenza_info}\nCHARS: {CHARS}\nSEGMENTS: {SEGMENTS}\nSTRAINS: {STRAINS}')
-# TODO: Comment
-# TODO: Update other files for reorganized feature calculation
 
 def load_data(names: list, include_publication: bool = True, unpooled = False) -> pd.DataFrame:
     '''
