@@ -1,6 +1,4 @@
-# permutation tests with energy distance, wasserstein distance and MMD to compare distributions of clusters in umap space across different categories (e.g. publications, ACC groups, etc.) and see if they are significantly different from each other. This can help us understand if certain clusters are enriched in certain categories and if the overall distribution of clusters differs between categories. We can also do this for the segments themselves to see if the distribution of segments in umap space differs between categories. This can provide insights into whether certain types of data (e.g. from certain publications or ACC groups) tend to cluster together in umap space, which could indicate underlying similarities in the data that are captured by the umap embedding.
-
-from model_check import *
+from prediction_test import *
 import seaborn as sns
 SEGMENTS = ["PB2", "PB1", "PA", "HA", "NP", "NA", "M", "NS"]
 SEGMENT_COLORS = {segment: color for segment, color in zip(SEGMENTS, sns.color_palette("Set2", len(SEGMENTS)))}
